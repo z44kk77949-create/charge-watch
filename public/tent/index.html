@@ -1,0 +1,556 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="charge">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content">
+<title>Charge Watch Tent</title>
+<link rel="manifest" href="/tent/manifest.json">
+<link rel="icon" href="/icons/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<meta name="theme-color" content="#0a0f13">
+<script>(function(){try{var t=localStorage.getItem('cw_tent_theme')||'charge';if(t==='auto')t=matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light';if(['light','dark','charge'].indexOf(t)<0)t='charge';document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
+<link rel="stylesheet" href="/shared/app.css">
+<style>
+  /* Intake is used one-handed, at speed, standing up — the fields are taller
+     than the house default and the primary action is thumb-sized. */
+  .intake input, .intake select { padding:13px 12px; font-size:16px; }
+  .slip { text-align:center; }
+  .slip .code { font:800 30px/1.2 ui-monospace,SFMono-Regular,Menlo,monospace; letter-spacing:.14em; margin:10px 0 2px; }
+  #scan-wrap { position:relative; background:#000; border-radius:12px; overflow:hidden; aspect-ratio:4/3; }
+  #scan-video { width:100%; height:100%; object-fit:cover; display:block; }
+  .scan-frame { position:absolute; inset:14% 14%; border:3px solid rgba(255,255,255,.85); border-radius:14px; box-shadow:0 0 0 999px rgba(0,0,0,.28); }
+  .verdict { padding:14px; border-radius:12px; text-align:center; margin-bottom:12px; }
+  .verdict .h { font-size:19px; font-weight:800; letter-spacing:.03em; }
+  .verdict.yes { background:var(--pill-green-bg); color:var(--pill-green-fg); }
+  .verdict.no  { background:var(--pill-red-bg);   color:var(--pill-red-fg); }
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">
+    <span class="mark" aria-hidden="true">⚡</span>
+    <div><div class="t">Charge Watch <span style="opacity:.7;">Tent</span></div><div class="s" id="hdr-sub">Handler console</div></div>
+  </div>
+  <span style="display:flex;align-items:center;gap:2px;">
+    <span class="who" id="who"></span>
+    <span class="menu"><button class="menu-btn" onclick="toggleMenu(event)" aria-label="Menu" aria-haspopup="true">&#8942;</button>
+      <div class="menu-list hide" id="menu">
+        <a href="/admin/" id="menu-admin" class="hide">Admin console</a>
+        <a href="#settings">Settings</a>
+        <a href="#" onclick="signOut();return false;">Sign out on this device</a>
+      </div></span></span>
+</header>
+
+<main><div class="inner" id="view"></div></main>
+
+<nav id="nav" class="hide">
+  <a href="#intake" data-t="intake">Take in</a>
+  <a href="#board" data-t="board">Board</a>
+  <a href="#collect" data-t="collect">Collect</a>
+</nav>
+
+<script src="/shared/core.js"></script>
+<script src="/shared/dialog.js"></script>
+<script src="/shared/theme.js"></script>
+<script src="/shared/qr.js"></script>
+<script>
+// Charge Watch — the tent console.
+//
+// Three tabs because a handler does three things: take a charger in, keep the
+// board moving, and hand chargers back. Each is one screen with the next action
+// already in front of them — the intake form reopens blank after a slip, the
+// board's buttons are the state change, and Collect opens on the scanner.
+//
+// Everything here is a CONVENIENCE over server-side authorisation, never a
+// substitute for it: the tent picker only offers tents this account may work,
+// and the server checks that again on every write.
+
+cwTheme.init("cw_tent_theme");
+
+const V = document.getElementById("view");
+let ME = null, BOARD = null, FILTER = "open", SEARCH = "", LAST_SLIP = null, MATCHES = [];
+let SCAN_STOP = null, FOUND = null, PROOF = "";
+
+const TABS = ["intake", "board", "collect", "settings"];
+function tab() { const h = (location.hash || "#intake").slice(1).split("?")[0]; return TABS.includes(h) ? h : "intake"; }
+function setNav() { document.querySelectorAll("nav a").forEach(a => a.classList.toggle("on", a.dataset.t === tab())); }
+function toggleMenu(e) { e.preventDefault(); e.stopPropagation(); document.getElementById("menu").classList.toggle("hide"); }
+function closeMenu() { document.getElementById("menu").classList.add("hide"); }
+document.addEventListener("click", closeMenu);
+
+async function boot() {
+  if (!code()) return renderSignIn();
+  await load();
+}
+
+async function load(quiet) {
+  if (!quiet) V.innerHTML = cwSkeleton({ cards: 2, lines: 4 });
+  const me = await api("/api/me");
+  if (me && me.__neterr) { V.innerHTML = cwLoadError(() => load()); return; }
+  if (!me.ok || me.kind !== "staff") { try { localStorage.removeItem("cw_code"); } catch (e) {} return renderSignIn(); }
+  ME = me;
+  document.getElementById("hdr-sub").textContent = me.tent ? me.tent.name : (me.event_name || "Handler console");
+  document.getElementById("who").textContent = me.name || "";
+  document.getElementById("nav").classList.remove("hide");
+  document.getElementById("menu-admin").classList.toggle("hide", !me.is_admin);
+  route();
+}
+
+function route() {
+  if (!code()) return renderSignIn();
+  if (!ME) return load();
+  setNav(); closeMenu();
+  stopScan();
+  const t = tab();
+  if (t === "intake") renderIntake();
+  else if (t === "board") renderBoard();
+  else if (t === "collect") renderCollect();
+  else renderSettings();
+  try { window.scrollTo(0, 0); } catch (e) {}
+}
+window.addEventListener("hashchange", route);
+// The board goes stale fast when several handlers work the same tent; refresh
+// it on focus, but never while a form is being typed into.
+cwTabRefresh(() => { if (code() && ME && tab() === "board") loadBoard(); }, { minMs: 30000 });
+
+// ---------------------------------------------------------------------------
+// Sign in
+// ---------------------------------------------------------------------------
+function renderSignIn() {
+  document.getElementById("nav").classList.add("hide");
+  document.getElementById("who").textContent = "";
+  V.innerHTML = '<div class="card"><h2>Handler sign-in</h2>'
+    + '<p class="muted small" style="margin:0;">Use the username and PIN your organiser gave you.</p>'
+    + '<label for="u">Username</label><input id="u" autocapitalize="none" autocomplete="username" spellcheck="false">'
+    + '<label for="p">PIN</label><input id="p" type="password" inputmode="numeric" autocomplete="current-password" maxlength="10">'
+    + '<div class="msg err hide" id="err" role="alert"></div>'
+    + '<button class="primary wide" style="margin-top:14px;" onclick="doSignIn()">Sign in</button></div>';
+  const p = document.getElementById("p");
+  p.addEventListener("keydown", (e) => { if (e.key === "Enter") doSignIn(); });
+  setTimeout(() => { try { document.getElementById("u").focus(); } catch (e) {} }, 60);
+}
+
+async function doSignIn() {
+  const u = (document.getElementById("u") || {}).value || "";
+  const p = (document.getElementById("p") || {}).value || "";
+  const err = document.getElementById("err");
+  const show = (m) => { err.textContent = m; err.classList.remove("hide"); };
+  if (!u || !p) return show("Enter your username and PIN.");
+  const r = await fetch("/api/auth", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action: "staff", username: u, pin: p }),
+  }).then(x => x.json()).catch(() => ({ ok: false, error: "Network error — check your connection." }));
+  if (!r.ok) return show(r.error || "That didn't work.");
+  try { localStorage.setItem("cw_code", r.token); } catch (e) {}
+  await load();
+}
+
+async function signOut() {
+  closeMenu();
+  if (!(await cwConfirm("You'll need your PIN to sign back in.", { title: "Sign out on this device?", ok: "Sign out", danger: true }))) return;
+  await post("/api/auth", { action: "logout" });
+  try { localStorage.removeItem("cw_code"); } catch (e) {}
+  ME = null; location.hash = "#intake"; renderSignIn();
+}
+
+// ---------------------------------------------------------------------------
+// Take in
+// ---------------------------------------------------------------------------
+function renderIntake() {
+  // A slip just printed stays on screen until the handler moves on — losing it
+  // to a re-render would mean the code is gone for good.
+  if (LAST_SLIP) return renderSlip();
+
+  const tents = ME.tents || [];
+  if (!tents.length) {
+    V.innerHTML = '<div class="card"><div class="empty"><div class="mk">⚠</div>'
+      + "<p>You're not assigned to a tent yet.</p><p class=\"small\">An admin can set that in Admin → Staff.</p></div></div>";
+    return;
+  }
+
+  V.innerHTML = '<div class="card intake"><h2>Take a charger in</h2>'
+    + (tents.length > 1
+        ? '<label for="tent">Tent</label><select id="tent">' + tents.map(t => `<option value="${esc(t.id)}">${esc(t.name)}</option>`).join("") + "</select>"
+        : `<input type="hidden" id="tent" value="${esc(tents[0].id)}">`)
+    + '<label for="label">Tag number on the charger *</label>'
+    + '<input id="label" maxlength="40" autocapitalize="characters" spellcheck="false" placeholder="e.g. 47" aria-label="Tag number">'
+    + '<div class="hint">Write this on the charger before you take it.</div>'
+    + '<label for="slot">Charging point</label><input id="slot" maxlength="20" autocapitalize="characters" spellcheck="false" placeholder="e.g. B3">'
+    + '<label for="owner">Their name</label><input id="owner" maxlength="60" placeholder="Optional — helps if they lose the slip">'
+    + '<label for="desc">What it looks like</label><input id="desc" maxlength="120" placeholder="e.g. black Anker, blue cable">'
+    + '<div class="msg err hide" id="err" role="alert"></div>'
+    + '<button class="primary wide" style="margin-top:16px;padding:14px;" onclick="doIntake()">Book it in</button>'
+    + "</div>";
+  setTimeout(() => { try { document.getElementById("label").focus(); } catch (e) {} }, 60);
+}
+
+async function doIntake() {
+  const val = (id) => { const el = document.getElementById(id); return el ? el.value : ""; };
+  const err = document.getElementById("err");
+  if (!val("label").trim()) { err.textContent = "Enter the tag number you wrote on the charger."; err.classList.remove("hide"); return; }
+  const r = await post("/api/intake", {
+    tent_id: val("tent"), label: val("label"), slot: val("slot"),
+    owner_name: val("owner"), device_desc: val("desc"),
+  });
+  if (!r.ok) { err.textContent = r.error || "Couldn't book that in."; err.classList.remove("hide"); return; }
+  LAST_SLIP = r;
+  renderSlip();
+}
+
+function renderSlip() {
+  const s = LAST_SLIP;
+  V.innerHTML = '<div class="card slip">'
+    + '<div class="tiny muted noprint" style="text-transform:uppercase;letter-spacing:.08em;">Give this to them</div>'
+    + `<h2 style="margin:6px 0 2px;">${esc(s.ticket.tent_name)} · ${esc(s.ticket.ref)}</h2>`
+    + `<p class="small muted" style="margin:0;">Tag ${esc(s.ticket.label)}${s.ticket.slot ? " · point " + esc(s.ticket.slot) : ""}</p>`
+    + `<div class="qr-plate" style="margin-top:14px;">${cwQr.svg(s.claim_url, { label: "Collection code" })}</div>`
+    + `<div class="code">${esc(s.claim_code)}</div>`
+    + '<p class="small muted" style="margin:2px 0 0;">Scan the square, or type the code at the address below.</p>'
+    + `<p class="tiny muted" style="margin:6px 0 0;word-break:break-all;">${esc(s.claim_url.split("#")[0])}</p>`
+    + '<div class="btnrow noprint" style="margin-top:18px;justify-content:center;">'
+    + '<button onclick="window.print()">Print</button>'
+    + '<button class="primary" onclick="nextIntake()">Take another</button>'
+    + "</div>"
+    + '<p class="hint noprint" style="margin-top:12px;">This code is shown once. If they lose it before linking their phone, reissue it from the Board.</p>'
+    + "</div>";
+}
+
+async function nextIntake() {
+  LAST_SLIP = null;
+  renderIntake();
+}
+
+// ---------------------------------------------------------------------------
+// Board
+// ---------------------------------------------------------------------------
+async function renderBoard() {
+  if (!BOARD) V.innerHTML = cwSkeleton({ cards: 3, lines: 3 });
+  await loadBoard();
+}
+
+async function loadBoard() {
+  const qs = new URLSearchParams();
+  if (FILTER && FILTER !== "all") qs.set("status", FILTER);
+  if (SEARCH) qs.set("q", SEARCH);
+  const d = await api("/api/board" + (qs.toString() ? "?" + qs.toString() : ""));
+  if (d && d.__neterr) { V.innerHTML = cwLoadError(() => loadBoard()); return; }
+  if (!d.ok) { V.innerHTML = `<div class="card"><p class="msg err">${esc(d.error || "Couldn't load the board.")}</p></div>`; return; }
+  BOARD = d;
+  paintBoard();
+}
+
+function paintBoard() {
+  const c = BOARD.counts || {};
+  const chip = (key, label, n) => `<button type="button" class="chip${FILTER === key ? " on" : ""}" onclick="setFilter('${key}')">${label}${n != null ? ` ${n}` : ""}</button>`;
+
+  let html = '<div class="grid2" style="grid-template-columns:repeat(4,1fr);margin-bottom:12px;">'
+    + `<div class="stat"><div class="n">${c.charging || 0}</div><div class="k">Charging</div></div>`
+    + `<div class="stat"><div class="n" style="color:var(--ok);">${c.ready || 0}</div><div class="k">Ready</div></div>`
+    + `<div class="stat"><div class="n">${c.received || 0}</div><div class="k">Waiting</div></div>`
+    + `<div class="stat"><div class="n">${c.collected || 0}</div><div class="k">Gone</div></div>`
+    + "</div>"
+    + '<div class="chips">'
+    + chip("open", "All here", c.open) + chip("charging", "Charging") + chip("ready", "Ready")
+    + chip("received", "Waiting") + chip("held", "On hold") + chip("collected", "Collected")
+    + "</div>"
+    + `<input id="q" placeholder="Search tag, ticket, name or point" value="${esc(SEARCH)}" oninput="onSearch(this.value)" style="margin-bottom:12px;" aria-label="Search the board">`;
+
+  const rows = BOARD.tickets || [];
+  if (!rows.length) {
+    html += '<div class="card"><div class="empty"><div class="mk">✓</div><p>'
+      + (SEARCH ? "Nothing matches that." : "Nothing here.") + "</p></div></div>";
+  } else {
+    html += rows.map(ticketRow).join("");
+  }
+  V.innerHTML = html;
+}
+
+const PILL = { ready: "green", charging: "amber", received: "blue", held: "red", collected: "gray" };
+
+function elapsed(from) {
+  if (!from) return "";
+  const mins = Math.floor((Date.now() - new Date(from).getTime()) / 60000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return mins + "m";
+  const h = Math.floor(mins / 60);
+  return h + "h" + (mins % 60 ? " " + (mins % 60) + "m" : "");
+}
+
+function ticketRow(t) {
+  const since = t.status === "ready" ? t.ready_at : t.received_at;
+  const acts = [];
+  if (t.status === "received") acts.push(["Start charging", `setStatus('${t.id}','charging')`, "primary"]);
+  if (t.status === "charging" || t.status === "received") acts.push(["Mark ready", `setStatus('${t.id}','ready')`, "primary"]);
+  if (t.status === "ready") acts.push(["Back to charging", `setStatus('${t.id}','charging')`, ""]);
+  if (t.status !== "collected" && t.status !== "held") acts.push(["Hold", `setStatus('${t.id}','held')`, ""]);
+  if (t.status === "held") acts.push(["Release hold", `setStatus('${t.id}','charging')`, ""]);
+  if (t.status !== "collected") acts.push(["Edit", `editTicket('${t.id}')`, ""]);
+  if (t.status !== "collected" && !t.linked) acts.push(["Reissue code", `reissue('${t.id}')`, ""]);
+
+  return '<div class="card" style="padding:12px 14px;">'
+    + '<div style="display:flex;gap:10px;align-items:flex-start;">'
+    + '<div style="flex:1;min-width:0;">'
+    + `<div class="title">${t.label ? "Tag " + esc(t.label) : esc(t.ref)}`
+    + `${t.slot ? ` <span class="muted small">· point ${esc(t.slot)}</span>` : ""}</div>`
+    + `<div class="ref">${esc(t.ref)}${t.owner_name ? " · " + esc(t.owner_name) : ""}</div>`
+    + (t.device_desc ? `<div class="tiny muted" style="margin-top:2px;">${esc(t.device_desc)}</div>` : "")
+    + "</div>"
+    + `<div style="text-align:right;flex:none;"><span class="pill ${PILL[t.status] || "gray"}">${esc(t.status_label)}</span>`
+    + `<div class="tiny muted" style="margin-top:4px;">${esc(elapsed(since))}</div>`
+    + `${t.linked ? '<div class="tiny muted" title="Linked to their phone">📱 linked</div>' : '<div class="tiny muted">slip only</div>'}`
+    + "</div></div>"
+    + (acts.length ? '<div class="btnrow" style="margin-top:10px;">' + acts.map(([l, fn, cls]) => `<button class="small ${cls}" onclick="${fn}">${l}</button>`).join("") + "</div>" : "")
+    + (t.notes ? `<p class="tiny muted" style="margin:8px 0 0;">${esc(t.notes)}</p>` : "")
+    + "</div>";
+}
+
+function setFilter(f) { FILTER = f; loadBoard(); }
+
+// Debounced so typing doesn't fire a request per keystroke, and the field keeps
+// focus across the re-render it triggers.
+let searchTimer = null;
+function onSearch(v) {
+  SEARCH = v;
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(async () => {
+    await loadBoard();
+    const el = document.getElementById("q");
+    if (el) { el.focus(); el.setSelectionRange(el.value.length, el.value.length); }
+  }, 300);
+}
+
+async function setStatus(id, status) {
+  const r = await post("/api/board", { action: "status", ticket_id: id, status });
+  if (!r.ok) return cwToast(r.error || "Couldn't update that.", { type: "err" });
+  if (status === "ready") {
+    cwToast(r.notified > 0 ? "Marked ready — they've been told." : (r.linked ? "Marked ready. We couldn't reach them, so call it out." : "Marked ready. They haven't linked a phone, so call it out."),
+      { type: r.notified > 0 ? "ok" : "info", dur: 4200 });
+  } else {
+    cwToast("Updated.", { type: "ok", dur: 1800 });
+  }
+  await loadBoard();
+}
+
+async function editTicket(id) {
+  const t = (BOARD.tickets || []).find(x => x.id === id);
+  if (!t) return;
+  const form = '<label for="e-label">Tag number</label><input id="e-label" maxlength="40" value="' + esc(t.label || "") + '">'
+    + '<label for="e-slot">Charging point</label><input id="e-slot" maxlength="20" value="' + esc(t.slot || "") + '">'
+    + '<label for="e-owner">Their name</label><input id="e-owner" maxlength="60" value="' + esc(t.owner_name || "") + '">'
+    + '<label for="e-desc">What it looks like</label><input id="e-desc" maxlength="120" value="' + esc(t.device_desc || "") + '">'
+    + '<label for="e-notes">Note</label><textarea id="e-notes" maxlength="300">' + esc(t.notes || "") + "</textarea>";
+  const vals = await formDialog("Edit " + t.ref, form, ["e-label", "e-slot", "e-owner", "e-desc", "e-notes"], "Save");
+  if (!vals) return;
+  const r = await post("/api/board", {
+    action: "edit", ticket_id: id,
+    label: vals["e-label"], slot: vals["e-slot"], owner_name: vals["e-owner"],
+    device_desc: vals["e-desc"], notes: vals["e-notes"],
+  });
+  if (!r.ok) return cwToast(r.error || "Couldn't save that.", { type: "err" });
+  cwToast("Saved.", { type: "ok" });
+  await loadBoard();
+}
+
+async function reissue(id) {
+  if (!(await cwConfirm("The old slip stops working straight away. Only do this for someone who can show you the charger and tell you the tag number.", { title: "Reissue the collection code?", ok: "Reissue", danger: true }))) return;
+  const r = await post("/api/board", { action: "reissue", ticket_id: id });
+  if (!r.ok) return cwToast(r.error || "Couldn't reissue that.", { type: "err" });
+  await cwConfirm(`New collection code:\n\n${r.claim_code}\n\nWrite it down for them now — it won't be shown again.`, { title: "New code", ok: "Done", cancel: "Close" });
+  await loadBoard();
+}
+
+// ---------------------------------------------------------------------------
+// Collect
+// ---------------------------------------------------------------------------
+function renderCollect() {
+  FOUND = null; PROOF = ""; MATCHES = [];
+  const canScan = cwQr.scanSupported();
+  V.innerHTML = '<div class="card"><h2>Hand a charger back</h2>'
+    + '<p class="muted small" style="margin:0 0 12px;">Scan the code on their phone, or type it in. Their slip code works too.</p>'
+    + (canScan
+        ? '<div id="scan-wrap" class="hide"><video id="scan-video" playsinline muted></video><div class="scan-frame"></div></div>'
+          + '<div class="btnrow" style="margin-top:10px;"><button class="primary wide" id="scan-btn" onclick="toggleScan()">Scan their code</button></div>'
+          + '<div class="tiny muted" style="text-align:center;margin-top:8px;">or type it below</div>'
+        : '<p class="tiny muted" style="margin:0 0 10px;">This browser can\'t use the camera to scan. Type the code instead — the six digits from their screen, or the code from their slip.</p>')
+    + '<label for="q">Code</label>'
+    + '<input id="q" class="codefield" autocapitalize="characters" spellcheck="false" placeholder="A-041 274913" aria-label="Collection code">'
+    + '<div class="hint">Ticket number and six digits, or the eight-character slip code.</div>'
+    + '<button class="primary wide" style="margin-top:12px;" onclick="doLookup()">Check</button>'
+    + '<div class="msg err hide" id="err" role="alert"></div>'
+    + "</div>"
+    + '<div id="result"></div>';
+  const q = document.getElementById("q");
+  q.addEventListener("keydown", (e) => { if (e.key === "Enter") doLookup(); });
+}
+
+async function toggleScan() {
+  const wrap = document.getElementById("scan-wrap"), btn = document.getElementById("scan-btn");
+  if (SCAN_STOP) { stopScan(); btn.textContent = "Scan their code"; wrap.classList.add("hide"); return; }
+  wrap.classList.remove("hide");
+  btn.textContent = "Stop scanning";
+  SCAN_STOP = await cwQr.scanStart(
+    document.getElementById("scan-video"),
+    (value) => { stopScan(); wrap.classList.add("hide"); btn.textContent = "Scan their code"; document.getElementById("q").value = value; doLookup(); },
+    (why) => {
+      stopScan(); wrap.classList.add("hide"); btn.textContent = "Scan their code";
+      cwToast(why === "denied" ? "Camera access was declined — type the code instead."
+            : why === "unsupported" ? "This browser can't scan — type the code instead."
+            : "Couldn't open the camera — type the code instead.", { type: "err", dur: 4200 });
+    }
+  );
+}
+function stopScan() { if (SCAN_STOP) { try { SCAN_STOP(); } catch (e) {} SCAN_STOP = null; } }
+window.addEventListener("pagehide", stopScan);
+
+async function doLookup() {
+  const q = ((document.getElementById("q") || {}).value || "").trim();
+  const err = document.getElementById("err");
+  err.classList.add("hide");
+  if (!q) { err.textContent = "Scan or type their code."; err.classList.remove("hide"); return; }
+
+  const r = await post("/api/collect", { action: "lookup", q });
+  if (!r.ok) { err.textContent = r.error || "Couldn't check that."; err.classList.remove("hide"); return; }
+
+  PROOF = q;
+  const out = document.getElementById("result");
+
+  if (r.ticket) {
+    FOUND = r.ticket;
+    out.innerHTML = verdictCard(r.verified, r.ticket, r.message);
+    return;
+  }
+
+  FOUND = null;
+  const matches = MATCHES = r.matches || [];
+  out.innerHTML = matches.length
+    ? '<div class="card"><h2>No code — pick from the board</h2>'
+      + '<p class="muted small" style="margin:0 0 10px;">Releasing from here is recorded as a manual hand-back and needs a reason.</p>'
+      + matches.map(m => '<div class="row"><div class="grow">'
+          + `<div class="title">${m.label ? "Tag " + esc(m.label) : esc(m.ref)}</div>`
+          + `<div class="ref">${esc(m.ref)}${m.owner_name ? " · " + esc(m.owner_name) : ""}${m.slot ? " · point " + esc(m.slot) : ""}</div>`
+          + (m.device_desc ? `<div class="tiny muted">${esc(m.device_desc)}</div>` : "")
+          + `</div><button class="small" onclick="pick('${esc(m.id)}')">Select</button></div>`).join("")
+      + "</div>"
+    : '<div class="card"><div class="empty"><div class="mk">?</div><p>Nothing matches that.</p>'
+      + '<p class="small">Check the code, or search their name or the tag number.</p></div></div>';
+}
+
+// Selecting a search result is explicitly NOT a proof: it carries the record
+// into the verdict card with `verified` false and clears any code that was
+// typed, so the only way on from here is a manual release with a reason.
+function pick(id) {
+  const match = (MATCHES || []).find(x => x.id === id);
+  if (!match) return;
+  FOUND = match;
+  PROOF = "";
+  document.getElementById("result").innerHTML = verdictCard(false, FOUND, "You picked this from the board — no code was checked.");
+}
+
+function verdictCard(verified, t, message) {
+  const rows = [
+    ["Ticket", t.ref], ["Tag", t.label || "—"], ["Charging point", t.slot || "—"],
+    ["Looks like", t.device_desc || "—"], ["Name given", t.owner_name || t.customer_name || "—"],
+    ["Status", t.status_label || t.status],
+  ];
+  return '<div class="card">'
+    + `<div class="verdict ${verified ? "yes" : "no"}"><div class="h">${verified ? "✓ Code checks out" : "✕ No valid code"}</div>`
+    + `<div class="small" style="margin-top:4px;">${esc(verified ? "Check the charger matches the tag below, then hand it over." : (message || "Ask for their code, or release manually with a reason."))}</div></div>`
+    + rows.map(([k, v]) => `<div class="row"><div class="grow small muted">${esc(k)}</div><div class="small" style="text-align:right;font-weight:600;">${esc(v)}</div></div>`).join("")
+    + (t.status === "collected"
+        ? '<p class="msg err" style="margin-top:12px;">This charger has already been collected.</p>'
+        : '<div class="btnrow" style="margin-top:14px;">'
+          + `<button class="${verified ? "primary" : ""} wide" onclick="doRelease(${verified ? "true" : "false"})">${verified ? "Hand it over" : "Release without a code…"}</button>`
+          + "</div>")
+    + "</div>";
+}
+
+async function doRelease(verified) {
+  if (!FOUND) return;
+  let note = "";
+  if (!verified) {
+    const vals = await formDialog(
+      "Release without a code",
+      '<p class="small muted" style="margin:0 0 4px;">This is recorded and shown to the organiser. Write who you handed it to and how you checked they were the owner.</p>'
+      + '<textarea id="rel-note" maxlength="300" placeholder="e.g. Jo Tan — described the charger and the sticker on the back, showed ID"></textarea>',
+      ["rel-note"], "Release"
+    );
+    if (!vals) return;
+    note = (vals["rel-note"] || "").trim();
+    if (note.length < 4) return cwToast("Write a short reason first.", { type: "err" });
+  }
+  const r = await post("/api/collect", { action: "release", ticket_id: FOUND.id, proof: PROOF, note });
+  if (!r.ok) return cwToast(r.error || "Couldn't release that.", { type: "err" });
+  cwToast(`${FOUND.label ? "Tag " + FOUND.label : FOUND.ref} handed back.`, { type: "ok" });
+  FOUND = null; PROOF = "";
+  BOARD = null;
+  renderCollect();
+}
+
+// ---------------------------------------------------------------------------
+// Settings
+// ---------------------------------------------------------------------------
+function renderSettings() {
+  V.innerHTML = '<div class="card"><h2>Account</h2>'
+    + `<div class="row"><div class="grow small muted">Name</div><div class="small" style="text-align:right;">${esc(ME.name)}</div></div>`
+    + `<div class="row"><div class="grow small muted">Username</div><div class="small" style="text-align:right;">${esc(ME.username)}</div></div>`
+    + `<div class="row"><div class="grow small muted">Role</div><div class="small" style="text-align:right;">${esc(ME.role)}</div></div>`
+    + `<div class="row"><div class="grow small muted">Tent</div><div class="small" style="text-align:right;">${esc(ME.tent ? ME.tent.name : "All tents")}</div></div></div>`
+    + '<div class="card"><h2>Appearance</h2>' + cwTheme.pickerHTML() + "</div>"
+    + '<div class="card"><h2>This device</h2>'
+    + '<div class="btnrow"><button class="danger" onclick="signOut()">Sign out on this device</button></div></div>';
+}
+function cwThemeChanged() { if (tab() === "settings") renderSettings(); }
+
+// ---------------------------------------------------------------------------
+// A small form dialog, in the same shape as the house confirm.
+// ---------------------------------------------------------------------------
+function formDialog(title, innerHTML, fieldIds, okLabel) {
+  return new Promise((resolve) => {
+    const wrap = document.createElement("div");
+    wrap.id = "cw-modal";
+    wrap.innerHTML = '<div class="cw-card" role="dialog" aria-modal="true" aria-label="' + esc(title) + '">'
+      + '<div class="cw-mtitle">' + esc(title) + "</div>"
+      + '<div class="cw-body">' + innerHTML + "</div>"
+      + '<div class="cw-mbtns"><button type="button" class="cw-cancel">Cancel</button>'
+      + '<button type="button" class="cw-ok">' + esc(okLabel || "Save") + "</button></div></div>";
+    document.body.appendChild(wrap);
+    const finish = (val) => {
+      wrap.classList.remove("in");
+      document.removeEventListener("keydown", onKey, true);
+      setTimeout(() => { if (wrap.parentNode) wrap.parentNode.removeChild(wrap); }, 200);
+      resolve(val);
+    };
+    const collect = () => {
+      const out = {};
+      for (const id of fieldIds) { const el = wrap.querySelector("#" + id); out[id] = el ? el.value : ""; }
+      return out;
+    };
+    const onKey = (e) => { if (e.key === "Escape") { e.preventDefault(); finish(null); } };
+    wrap.querySelector(".cw-ok").addEventListener("click", () => finish(collect()));
+    wrap.querySelector(".cw-cancel").addEventListener("click", () => finish(null));
+    wrap.addEventListener("click", (e) => { if (e.target === wrap) finish(null); });
+    document.addEventListener("keydown", onKey, true);
+    void wrap.offsetWidth;
+    wrap.classList.add("in");
+    const first = wrap.querySelector("#" + fieldIds[0]);
+    setTimeout(() => { try { first && first.focus(); } catch (e) {} }, 60);
+  });
+}
+
+if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {});
+boot();
+</script>
+<script src="/shared/app-refresh.js"></script>
+<style>
+#cw-modal { position:fixed; inset:0; z-index:2147483001; display:flex; align-items:center; justify-content:center; padding:20px; background:rgba(0,0,0,.5); opacity:0; transition:opacity .2s ease; overflow-y:auto; }
+#cw-modal.in { opacity:1; }
+#cw-modal .cw-card { width:100%; max-width:420px; background:var(--surface); color:var(--text); border:1px solid var(--border); border-radius:16px; box-shadow:var(--shadow); padding:18px; margin:auto; }
+#cw-modal .cw-mtitle { font-weight:700; font-size:16px; margin-bottom:6px; }
+#cw-modal .cw-mbtns { display:flex; gap:10px; justify-content:flex-end; margin-top:16px; }
+#cw-modal .cw-ok { background:var(--primary-bg); color:var(--primary-fg); border-color:transparent; font-weight:600; }
+</style>
+</body>
+</html>

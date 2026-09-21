@@ -1,0 +1,20 @@
+name: CI
+
+# Syntax check + the dependency-free test suite. No browser, no npm install —
+# fast enough to gate every push and every pull request.
+on:
+  push:
+    branches: [main]
+  pull_request: {}
+  workflow_dispatch: {}
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Run tests
+        run: node tests/run.mjs

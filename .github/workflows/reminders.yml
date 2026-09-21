@@ -1,0 +1,38 @@
+name: reminders
+
+# Cloudflare Pages has no scheduler, so the "your charger is still waiting"
+# nudge is driven from here. The endpoint is idempotent — it stamps each ticket
+# it considers — so a double firing sends nothing twice, and a missed run just
+# means the next one picks the backlog up.
+#
+# Needs two repository secrets:
+#   APP_BASE_URL  e.g. https://charge-watch.pages.dev
+#   CRON_KEY      the same value as the CRON_KEY variable in the Pages dashboard
+#
+# The schedule is deliberately modest: the reminder window itself is set in the
+# app (Admin → Oversight), and this only has to run often enough to catch it.
+on:
+  schedule:
+    - cron: "*/30 * * * *"
+  workflow_dispatch: {}
+
+jobs:
+  nudge:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send due reminders
+        env:
+          BASE: ${{ secrets.APP_BASE_URL }}
+          KEY: ${{ secrets.CRON_KEY }}
+        run: |
+          if [ -z "$BASE" ] || [ -z "$KEY" ]; then
+            echo "APP_BASE_URL or CRON_KEY is not set — nothing to do."
+            exit 0
+          fi
+          code=$(curl -sS -o /tmp/out.json -w '%{http_code}' "$BASE/api/cron/reminders?key=$KEY")
+          cat /tmp/out.json
+          echo
+          if [ "$code" != "200" ]; then
+            echo "::error::reminders endpoint returned HTTP $code"
+            exit 1
+          fi

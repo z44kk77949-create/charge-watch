@@ -1,0 +1,501 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="charge">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content">
+<title>Charge Watch Admin</title>
+<link rel="manifest" href="/admin/manifest.json">
+<link rel="icon" href="/icons/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<meta name="theme-color" content="#0a0f13">
+<script>(function(){try{var t=localStorage.getItem('cw_admin_theme')||'charge';if(t==='auto')t=matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light';if(['light','dark','charge'].indexOf(t)<0)t='charge';document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
+<link rel="stylesheet" href="/shared/app.css">
+</head>
+<body>
+<header class="admin-mode">
+  <div class="brand">
+    <span class="mark" aria-hidden="true">⚙</span>
+    <div><div class="t">Charge Watch <span style="opacity:.7;">Admin</span></div><div class="s" id="hdr-sub">Setup &amp; oversight</div></div>
+  </div>
+  <span style="display:flex;align-items:center;gap:2px;">
+    <span class="who" id="who"></span>
+    <span class="menu"><button class="menu-btn" onclick="toggleMenu(event)" aria-label="Menu" aria-haspopup="true">&#8942;</button>
+      <div class="menu-list hide" id="menu">
+        <a href="/tent/">Tent console</a>
+        <a href="#settings">Settings</a>
+        <a href="#" onclick="signOut();return false;">Sign out on this device</a>
+      </div></span></span>
+</header>
+
+<main><div class="inner" id="view"></div></main>
+
+<nav id="nav" class="hide">
+  <a href="#tents" data-t="tents">Tents</a>
+  <a href="#staff" data-t="staff">Staff</a>
+  <a href="#oversight" data-t="oversight">Oversight</a>
+</nav>
+
+<script src="/shared/core.js"></script>
+<script src="/shared/dialog.js"></script>
+<script src="/shared/theme.js"></script>
+<script>
+// Charge Watch — the admin console.
+//
+// Setup lives in its own surface, beside the tent console rather than hidden
+// inside it: the people who RUN the tents and the person who SETS THEM UP are
+// doing different jobs, and a conditional tab in the handler app would put
+// account management one mis-tap from someone holding a queue.
+//
+// Tabs are named for the task, not the tables behind them.
+
+cwTheme.init("cw_admin_theme");
+
+const V = document.getElementById("view");
+let ME = null, TENTS = null, STAFF = null, OVER = null;
+
+const TABS = ["tents", "staff", "oversight", "settings"];
+function tab() { const h = (location.hash || "#tents").slice(1).split("?")[0]; return TABS.includes(h) ? h : "tents"; }
+function setNav() { document.querySelectorAll("nav a").forEach(a => a.classList.toggle("on", a.dataset.t === tab())); }
+function toggleMenu(e) { e.preventDefault(); e.stopPropagation(); document.getElementById("menu").classList.toggle("hide"); }
+function closeMenu() { document.getElementById("menu").classList.add("hide"); }
+document.addEventListener("click", closeMenu);
+
+async function boot() {
+  const me = await api("/api/me");
+  if (me && me.__neterr) { V.innerHTML = cwLoadError(() => boot()); return; }
+  // First run: no staff account exists at all, so the only thing this screen can
+  // usefully offer is creating the first one.
+  if (!me.ok && me.needs_setup) return renderSetup();
+  if (!me.ok || me.kind !== "staff") { try { localStorage.removeItem("cw_code"); } catch (e) {} return renderSignIn(); }
+  if (!me.is_admin) return renderNotAdmin(me);
+  ME = me;
+  document.getElementById("hdr-sub").textContent = me.event_name || "Setup & oversight";
+  document.getElementById("who").textContent = me.name || "";
+  document.getElementById("nav").classList.remove("hide");
+  route();
+}
+
+function route() {
+  if (!ME) return boot();
+  setNav(); closeMenu();
+  const t = tab();
+  if (t === "tents") renderTents();
+  else if (t === "staff") renderStaff();
+  else if (t === "oversight") renderOversight();
+  else renderSettings();
+  try { window.scrollTo(0, 0); } catch (e) {}
+}
+window.addEventListener("hashchange", route);
+
+// ---------------------------------------------------------------------------
+// First run and sign-in
+// ---------------------------------------------------------------------------
+function renderSetup() {
+  document.getElementById("nav").classList.add("hide");
+  V.innerHTML = '<div class="card"><h2>Set up Charge Watch</h2>'
+    + '<p class="muted small" style="margin:0 0 4px;">Nobody has an account yet. Create the owner account — it can create everyone else.</p>'
+    + '<p class="muted small" style="margin:0;">The setup key is the <strong>ADMIN_INIT_KEY</strong> you set in the Cloudflare dashboard.</p>'
+    + '<label for="k">Setup key</label><input id="k" type="password" autocomplete="off">'
+    + '<label for="n">Your name</label><input id="n" maxlength="60">'
+    + '<label for="u">Username</label><input id="u" autocapitalize="none" spellcheck="false" maxlength="40">'
+    + '<div class="hint">Letters, numbers, dot, dash or underscore.</div>'
+    + '<label for="p">Choose a PIN</label><input id="p" type="password" inputmode="numeric" maxlength="10">'
+    + '<div class="hint">4 to 10 digits. You\'ll type this at the start of every shift.</div>'
+    + '<div class="msg err hide" id="err" role="alert"></div>'
+    + '<button class="primary wide" style="margin-top:14px;" onclick="doSetup()">Create owner account</button></div>';
+}
+
+async function doSetup() {
+  const v = (id) => (document.getElementById(id) || {}).value || "";
+  const err = document.getElementById("err");
+  const r = await fetch("/api/auth", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action: "bootstrap", key: v("k"), name: v("n"), username: v("u"), pin: v("p") }),
+  }).then(x => x.json()).catch(() => ({ ok: false, error: "Network error — check your connection." }));
+  if (!r.ok) { err.textContent = r.error || "Couldn't create that account."; err.classList.remove("hide"); return; }
+  try { localStorage.setItem("cw_code", r.token); } catch (e) {}
+  cwToast("Owner account created.", { type: "ok" });
+  await boot();
+}
+
+function renderSignIn() {
+  document.getElementById("nav").classList.add("hide");
+  document.getElementById("who").textContent = "";
+  V.innerHTML = '<div class="card"><h2>Admin sign-in</h2>'
+    + '<label for="u">Username</label><input id="u" autocapitalize="none" autocomplete="username" spellcheck="false">'
+    + '<label for="p">PIN</label><input id="p" type="password" inputmode="numeric" autocomplete="current-password" maxlength="10">'
+    + '<div class="msg err hide" id="err" role="alert"></div>'
+    + '<button class="primary wide" style="margin-top:14px;" onclick="doSignIn()">Sign in</button></div>';
+  document.getElementById("p").addEventListener("keydown", (e) => { if (e.key === "Enter") doSignIn(); });
+}
+
+async function doSignIn() {
+  const v = (id) => (document.getElementById(id) || {}).value || "";
+  const err = document.getElementById("err");
+  const r = await fetch("/api/auth", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action: "staff", username: v("u"), pin: v("p") }),
+  }).then(x => x.json()).catch(() => ({ ok: false, error: "Network error — check your connection." }));
+  if (!r.ok) { err.textContent = r.error || "That didn't work."; err.classList.remove("hide"); return; }
+  try { localStorage.setItem("cw_code", r.token); } catch (e) {}
+  await boot();
+}
+
+function renderNotAdmin(me) {
+  document.getElementById("nav").classList.add("hide");
+  document.getElementById("who").textContent = me.name || "";
+  V.innerHTML = '<div class="card"><div class="empty"><div class="mk">🔒</div>'
+    + "<p>This console is for admins.</p>"
+    + '<p class="small">You\'re signed in as a handler — the tent console is where your work is.</p>'
+    + '<a href="/tent/"><button class="primary" style="margin-top:10px;">Go to the tent console</button></a></div></div>';
+}
+
+async function signOut() {
+  closeMenu();
+  await post("/api/auth", { action: "logout" });
+  try { localStorage.removeItem("cw_code"); } catch (e) {}
+  ME = null; location.hash = "#tents"; renderSignIn();
+}
+
+// ---------------------------------------------------------------------------
+// Tents
+// ---------------------------------------------------------------------------
+async function renderTents() {
+  if (!TENTS) V.innerHTML = cwSkeleton({ cards: 2, lines: 3 });
+  const d = await api("/api/tents");
+  if (d && d.__neterr) { V.innerHTML = cwLoadError(() => renderTents()); return; }
+  if (!d.ok) { V.innerHTML = `<div class="card"><p class="msg err">${esc(d.error || "Couldn't load tents.")}</p></div>`; return; }
+  TENTS = d;
+
+  const rows = (d.tents || []).map(t => '<div class="card">'
+    + '<div style="display:flex;gap:10px;align-items:flex-start;">'
+    + `<div style="flex:1;min-width:0;"><div class="title">${esc(t.name)} <span class="ref">(${esc(t.code)})</span></div>`
+    + (t.location ? `<div class="small muted">${esc(t.location)}</div>` : "")
+    + `<div class="tiny muted" style="margin-top:3px;">${t.open} here now · ${t.ready} ready · ${t.collected} collected${t.slots ? ` · ${t.slots} points` : ""}</div></div>`
+    + `<span class="pill ${t.active ? "green" : "gray"}">${t.active ? "Open" : "Closed"}</span></div>`
+    + '<div class="btnrow" style="margin-top:10px;">'
+    + `<button class="small" onclick="editTent('${esc(t.id)}')">Edit</button>`
+    + `<button class="small" onclick="toggleTent('${esc(t.id)}',${t.active ? "false" : "true"})">${t.active ? "Close" : "Reopen"}</button>`
+    + "</div></div>").join("");
+
+  V.innerHTML = (rows || '<div class="card"><div class="empty"><div class="mk">⛺</div><p>No tents yet.</p></div></div>')
+    + '<div class="btnrow"><button class="primary wide" onclick="newTent()">Add a tent</button></div>';
+}
+
+async function newTent() {
+  const vals = await formDialog("Add a tent",
+    '<label for="t-name">Name</label><input id="t-name" maxlength="60" placeholder="e.g. Main Stage Tent">'
+    + '<label for="t-code">Short code</label><input id="t-code" maxlength="4" autocapitalize="characters" placeholder="e.g. B">'
+    + '<div class="hint">Goes in front of every ticket number in this tent — B-001, B-002. One or two characters is ideal.</div>'
+    + '<label for="t-loc">Where it is</label><input id="t-loc" maxlength="120" placeholder="e.g. Behind the food trucks">'
+    + '<label for="t-slots">Charging points</label><input id="t-slots" type="number" min="1" max="999" placeholder="Optional">',
+    ["t-name", "t-code", "t-loc", "t-slots"], "Add tent");
+  if (!vals) return;
+  const r = await post("/api/tents", { action: "create", name: vals["t-name"], tent_code: vals["t-code"], location: vals["t-loc"], slots: vals["t-slots"] });
+  if (!r.ok) return cwToast(r.error || "Couldn't add that tent.", { type: "err" });
+  cwToast("Tent added.", { type: "ok" });
+  TENTS = null; renderTents();
+}
+
+async function editTent(id) {
+  const t = (TENTS.tents || []).find(x => x.id === id);
+  if (!t) return;
+  const vals = await formDialog("Edit " + t.name,
+    '<label for="t-name">Name</label><input id="t-name" maxlength="60" value="' + esc(t.name) + '">'
+    + '<label for="t-loc">Where it is</label><input id="t-loc" maxlength="120" value="' + esc(t.location || "") + '">'
+    + '<label for="t-slots">Charging points</label><input id="t-slots" type="number" min="1" max="999" value="' + esc(t.slots || "") + '">'
+    + '<p class="hint">The short code can\'t change — ticket numbers already issued would stop matching.</p>',
+    ["t-name", "t-loc", "t-slots"], "Save");
+  if (!vals) return;
+  const r = await post("/api/tents", { action: "update", id, name: vals["t-name"], location: vals["t-loc"], slots: vals["t-slots"] });
+  if (!r.ok) return cwToast(r.error || "Couldn't save that.", { type: "err" });
+  cwToast("Saved.", { type: "ok" });
+  TENTS = null; renderTents();
+}
+
+async function toggleTent(id, makeActive) {
+  const t = (TENTS.tents || []).find(x => x.id === id);
+  if (!makeActive && !(await cwConfirm(`No new chargers can be taken in at ${t ? t.name : "this tent"}. Anything already there must be collected first.`, { title: "Close this tent?", ok: "Close tent", danger: true }))) return;
+  const r = await post("/api/tents", { action: "update", id, active: makeActive });
+  if (!r.ok) return cwToast(r.error || "Couldn't change that.", { type: "err" });
+  cwToast(makeActive ? "Tent reopened." : "Tent closed.", { type: "ok" });
+  TENTS = null; renderTents();
+}
+
+// ---------------------------------------------------------------------------
+// Staff
+// ---------------------------------------------------------------------------
+async function renderStaff() {
+  if (!STAFF) V.innerHTML = cwSkeleton({ cards: 3, lines: 2 });
+  const [d, tents] = await Promise.all([api("/api/staff"), TENTS ? Promise.resolve(TENTS) : api("/api/tents")]);
+  if (d && d.__neterr) { V.innerHTML = cwLoadError(() => renderStaff()); return; }
+  if (!d.ok) { V.innerHTML = `<div class="card"><p class="msg err">${esc(d.error || "Couldn't load staff.")}</p></div>`; return; }
+  STAFF = d; if (tents && tents.ok) TENTS = tents;
+
+  const ROLE_PILL = { owner: "amber", admin: "blue", handler: "gray" };
+  const rows = (d.staff || []).map(s => '<div class="card">'
+    + '<div style="display:flex;gap:10px;align-items:flex-start;">'
+    + `<div style="flex:1;min-width:0;"><div class="title">${esc(s.name)}${s.id === d.me ? ' <span class="tiny muted">(you)</span>' : ""}</div>`
+    + `<div class="ref">${esc(s.username)}${s.tent_name ? " · " + esc(s.tent_name) : (s.role !== "handler" ? " · all tents" : "")}</div>`
+    + `<div class="tiny muted" style="margin-top:3px;">${s.last_seen_at ? "Last seen " + esc(fmt(s.last_seen_at)) : "Never signed in"}</div></div>`
+    + `<div style="text-align:right;flex:none;"><span class="pill ${ROLE_PILL[s.role] || "gray"}">${esc(s.role)}</span>`
+    + (s.active ? "" : '<div><span class="pill gray" style="margin-top:4px;">Off</span></div>')
+    + (s.locked ? '<div><span class="pill red" style="margin-top:4px;">Locked</span></div>' : "")
+    + "</div></div>"
+    + '<div class="btnrow" style="margin-top:10px;">'
+    + `<button class="small" onclick="editStaff('${esc(s.id)}')">Edit</button>`
+    + `<button class="small" onclick="resetPin('${esc(s.id)}')">Reset PIN</button>`
+    + (s.locked ? `<button class="small" onclick="unlockStaff('${esc(s.id)}')">Unlock</button>` : "")
+    + `<button class="small" onclick="toggleStaff('${esc(s.id)}',${s.active ? "false" : "true"})">${s.active ? "Deactivate" : "Reactivate"}</button>`
+    + "</div></div>").join("");
+
+  V.innerHTML = rows
+    + '<div class="btnrow"><button class="primary wide" onclick="newStaff()">Add a person</button></div>'
+    + '<p class="hint" style="margin-top:10px;">A handler works one tent. An admin works every tent and can open this console. PINs are never shown again after they\'re set — reset one if it\'s forgotten.</p>';
+}
+
+function tentOptions(selected, includeNone) {
+  const list = ((TENTS && TENTS.tents) || []).filter(t => t.active || t.id === selected);
+  return (includeNone ? `<option value="">No tent (all tents)</option>` : "")
+    + list.map(t => `<option value="${esc(t.id)}"${t.id === selected ? " selected" : ""}>${esc(t.name)}</option>`).join("");
+}
+
+async function newStaff() {
+  const canOwner = STAFF.my_role === "owner";
+  const vals = await formDialog("Add a person",
+    '<label for="s-name">Name</label><input id="s-name" maxlength="60">'
+    + '<label for="s-user">Username</label><input id="s-user" autocapitalize="none" spellcheck="false" maxlength="40">'
+    + '<label for="s-pin">PIN</label><input id="s-pin" type="text" inputmode="numeric" maxlength="10" placeholder="4 to 10 digits">'
+    + '<div class="hint">Tell them this PIN — it can\'t be shown again.</div>'
+    + '<label for="s-role">Role</label><select id="s-role"><option value="handler">Handler — one tent</option>'
+    + '<option value="admin">Admin — all tents and this console</option>'
+    + (canOwner ? '<option value="owner">Owner — admin, and can manage owners</option>' : "") + "</select>"
+    + '<label for="s-tent">Tent</label><select id="s-tent">' + tentOptions(null, true) + "</select>",
+    ["s-name", "s-user", "s-pin", "s-role", "s-tent"], "Add person");
+  if (!vals) return;
+  const r = await post("/api/staff", { action: "create", name: vals["s-name"], username: vals["s-user"], pin: vals["s-pin"], role: vals["s-role"], tent_id: vals["s-tent"] });
+  if (!r.ok) return cwToast(r.error || "Couldn't add that person.", { type: "err" });
+  cwToast("Added. Give them their username and PIN.", { type: "ok", dur: 4500 });
+  STAFF = null; renderStaff();
+}
+
+async function editStaff(id) {
+  const s = (STAFF.staff || []).find(x => x.id === id);
+  if (!s) return;
+  const canOwner = STAFF.my_role === "owner";
+  const roleOpt = (v, label) => `<option value="${v}"${s.role === v ? " selected" : ""}>${label}</option>`;
+  const vals = await formDialog("Edit " + s.name,
+    '<label for="s-name">Name</label><input id="s-name" maxlength="60" value="' + esc(s.name) + '">'
+    + '<label for="s-role">Role</label><select id="s-role">'
+    + roleOpt("handler", "Handler — one tent") + roleOpt("admin", "Admin — all tents and this console")
+    + (canOwner || s.role === "owner" ? roleOpt("owner", "Owner — admin, and can manage owners") : "") + "</select>"
+    + '<label for="s-tent">Tent</label><select id="s-tent">' + tentOptions(s.tent_id, true) + "</select>",
+    ["s-name", "s-role", "s-tent"], "Save");
+  if (!vals) return;
+  const r = await post("/api/staff", { action: "update", id, name: vals["s-name"], role: vals["s-role"], tent_id: vals["s-tent"] });
+  if (!r.ok) return cwToast(r.error || "Couldn't save that.", { type: "err" });
+  cwToast("Saved.", { type: "ok" });
+  STAFF = null; renderStaff();
+}
+
+async function resetPin(id) {
+  const s = (STAFF.staff || []).find(x => x.id === id);
+  const vals = await formDialog("Reset PIN for " + (s ? s.name : "this person"),
+    '<p class="small muted" style="margin:0 0 4px;">Their other devices are signed out straight away.</p>'
+    + '<label for="s-pin">New PIN</label><input id="s-pin" type="text" inputmode="numeric" maxlength="10" placeholder="4 to 10 digits">',
+    ["s-pin"], "Set PIN");
+  if (!vals) return;
+  const r = await post("/api/staff", { action: "set_pin", id, pin: vals["s-pin"] });
+  if (!r.ok) return cwToast(r.error || "Couldn't set that PIN.", { type: "err" });
+  cwToast("PIN set. Tell them the new one.", { type: "ok", dur: 4500 });
+  STAFF = null; renderStaff();
+}
+
+async function unlockStaff(id) {
+  const r = await post("/api/staff", { action: "unlock", id });
+  if (!r.ok) return cwToast(r.error || "Couldn't unlock.", { type: "err" });
+  cwToast("Unlocked — they can try their PIN again.", { type: "ok" });
+  STAFF = null; renderStaff();
+}
+
+async function toggleStaff(id, makeActive) {
+  const s = (STAFF.staff || []).find(x => x.id === id);
+  if (!makeActive && !(await cwConfirm(`${s ? s.name : "This person"} will be signed out everywhere and won't be able to sign back in.`, { title: "Deactivate this account?", ok: "Deactivate", danger: true }))) return;
+  const r = await post("/api/staff", { action: "update", id, active: makeActive });
+  if (!r.ok) return cwToast(r.error || "Couldn't change that.", { type: "err" });
+  cwToast(makeActive ? "Reactivated." : "Deactivated.", { type: "ok" });
+  STAFF = null; renderStaff();
+}
+
+// ---------------------------------------------------------------------------
+// Oversight
+// ---------------------------------------------------------------------------
+async function renderOversight() {
+  if (!OVER) V.innerHTML = cwSkeleton({ cards: 3, lines: 3 });
+  const d = await api("/api/oversight");
+  if (d && d.__neterr) { V.innerHTML = cwLoadError(() => renderOversight()); return; }
+  if (!d.ok) { V.innerHTML = `<div class="card"><p class="msg err">${esc(d.error || "Couldn't load oversight.")}</p></div>`; return; }
+  OVER = d;
+  const t = d.totals || {};
+
+  let html = '<div class="card"><h2>Tonight</h2>'
+    + '<div class="grid2" style="grid-template-columns:repeat(3,1fr);">'
+    + `<div class="stat"><div class="n">${t.open || 0}</div><div class="k">In the tents</div></div>`
+    + `<div class="stat"><div class="n" style="color:var(--ok);">${t.ready || 0}</div><div class="k">Ready</div></div>`
+    + `<div class="stat"><div class="n">${t.collected || 0}</div><div class="k">Collected</div></div>`
+    + "</div>"
+    + '<div class="grid2" style="margin-top:10px;">'
+    + `<div class="stat"><div class="n">${t.avg_charge_min != null ? t.avg_charge_min + "m" : "—"}</div><div class="k">Avg time to ready</div></div>`
+    + `<div class="stat"><div class="n">${t.avg_wait_min != null ? t.avg_wait_min + "m" : "—"}</div><div class="k">Avg wait to collect</div></div>`
+    + "</div></div>";
+
+  html += '<div class="card"><h2>By tent</h2>'
+    + ((d.tents || []).length
+        ? (d.tents || []).map(x => '<div class="row"><div class="grow">'
+            + `<div class="title">${esc(x.name)}</div>`
+            + `<div class="tiny muted">${x.charging} charging · ${x.received} waiting${x.held ? ` · ${x.held} on hold` : ""}</div></div>`
+            + `<div style="text-align:right;"><div style="font-weight:700;">${x.open}</div><div class="tiny muted">here now</div></div></div>`).join("")
+        : '<p class="muted small" style="margin:0;">No tents yet.</p>')
+    + "</div>";
+
+  // Waiting longest — the closing-time list.
+  const waiting = d.waiting || [];
+  html += '<div class="card"><h2>Ready and waiting</h2>'
+    + (waiting.length
+        ? waiting.slice(0, 20).map(w => '<div class="row"><div class="grow">'
+            + `<div class="title">${w.label ? "Tag " + esc(w.label) : esc(w.ref)}</div>`
+            + `<div class="ref">${esc(w.ref)} · ${esc(w.tent_name)}${w.slot ? " · point " + esc(w.slot) : ""}</div></div>`
+            + `<div style="text-align:right;"><div class="small">${esc(waitedFor(w.ready_at))}</div>`
+            + `<div class="tiny muted">${w.linked ? "notified" : "no phone linked"}</div></div></div>`).join("")
+        : '<p class="muted small" style="margin:0;">✓ Nothing sitting ready.</p>')
+    + "</div>";
+
+  // Manual releases and reissues — the things a person had to override.
+  const flagged = d.flagged || [];
+  html += '<div class="card"><h2>Needed a human</h2>'
+    + `<p class="muted small" style="margin:0 0 8px;">Chargers released without a code check, and codes reissued.${t.manual ? ` ${t.manual} manual release${t.manual === 1 ? "" : "s"} so far.` : ""}</p>`
+    + (flagged.length
+        ? flagged.map(f => '<div class="row"><div class="grow">'
+            + `<div class="small"><strong>${esc(f.ticket_ref || f.action)}</strong> — ${esc(f.detail || "")}</div>`
+            + `<div class="tiny muted">${esc(fmt(f.at))}${f.actor_name ? " · " + esc(f.actor_name) : ""}</div></div></div>`).join("")
+        : '<p class="muted small" style="margin:0;">✓ Nothing needed an override.</p>')
+    + "</div>";
+
+  html += '<div class="card"><h2>Recent activity</h2>'
+    + ((d.recent || []).length
+        ? (d.recent || []).slice(0, 40).map(a => '<div class="row"><div class="grow">'
+            + `<div class="small">${a.ticket_ref ? `<strong>${esc(a.ticket_ref)}</strong> — ` : ""}${esc(a.detail || a.action)}</div>`
+            + `<div class="tiny muted">${esc(fmt(a.at))}${a.actor_name ? " · " + esc(a.actor_name) : ""}</div></div></div>`).join("")
+        : '<p class="muted small" style="margin:0;">Nothing yet.</p>')
+    + "</div>";
+
+  // Settings live here: they are the rules of the operation, read in the same
+  // breath as the numbers they shape.
+  const s = d.settings || {};
+  html += '<div class="card"><h2>How it runs</h2>'
+    + '<label for="o-event">Event name</label>'
+    + `<input id="o-event" maxlength="40" value="${esc(s.event_name || "")}">`
+    + '<div class="hint">Shown in the header of all three apps.</div>'
+    + '<label for="o-msg">"Ready" message</label>'
+    + `<textarea id="o-msg" maxlength="200">${esc(s.ready_message || "")}</textarea>`
+    + '<div class="hint">Sent by Telegram and as a notification when a charger is marked ready.</div>'
+    + '<label for="o-rem">Remind again after</label>'
+    + `<select id="o-rem">${[0, 1, 2, 3, 4, 6, 8].map(h => `<option value="${h}"${String(s.reminder_hours) === String(h) ? " selected" : ""}>${h === 0 ? "Never" : h + " hour" + (h === 1 ? "" : "s")}</option>`).join("")}</select>`
+    + '<div class="hint">A nudge for a charger nobody has come back for.</div>'
+    + `<label class="inline"><input type="checkbox" id="o-req" ${String(s.collect_requires_code) === "1" ? "checked" : ""}> Require a code to hand a charger back</label>`
+    + '<div class="hint">A handler can still release without one, but must write a reason — and it shows up above.</div>'
+    + `<label class="inline"><input type="checkbox" id="o-auto" ${String(s.auto_charging_on_intake) === "1" ? "checked" : ""}> New chargers go straight to "charging"</label>`
+    + '<div class="hint">Turn this off if chargers queue before they\'re plugged in.</div>'
+    + '<div class="btnrow" style="margin-top:14px;"><button class="primary" onclick="saveSettings()">Save settings</button></div>'
+    + "</div>";
+
+  V.innerHTML = html;
+}
+
+function waitedFor(from) {
+  if (!from) return "";
+  const mins = Math.floor((Date.now() - new Date(from).getTime()) / 60000);
+  if (mins < 60) return mins + "m";
+  const h = Math.floor(mins / 60);
+  return h + "h " + (mins % 60) + "m";
+}
+
+async function saveSettings() {
+  const v = (id) => (document.getElementById(id) || {}).value || "";
+  const c = (id) => !!(document.getElementById(id) || {}).checked;
+  const r = await post("/api/oversight", {
+    action: "settings",
+    event_name: v("o-event"), ready_message: v("o-msg"), reminder_hours: v("o-rem"),
+    collect_requires_code: c("o-req"), auto_charging_on_intake: c("o-auto"),
+  });
+  if (!r.ok) return cwToast(r.error || "Couldn't save those settings.", { type: "err" });
+  cwToast("Settings saved.", { type: "ok" });
+  if (r.settings && r.settings.event_name) document.getElementById("hdr-sub").textContent = r.settings.event_name;
+  OVER = null;
+}
+
+// ---------------------------------------------------------------------------
+// Settings (this device)
+// ---------------------------------------------------------------------------
+function renderSettings() {
+  V.innerHTML = '<div class="card"><h2>Account</h2>'
+    + `<div class="row"><div class="grow small muted">Name</div><div class="small" style="text-align:right;">${esc(ME.name)}</div></div>`
+    + `<div class="row"><div class="grow small muted">Username</div><div class="small" style="text-align:right;">${esc(ME.username)}</div></div>`
+    + `<div class="row"><div class="grow small muted">Role</div><div class="small" style="text-align:right;">${esc(ME.role)}</div></div></div>`
+    + '<div class="card"><h2>Appearance</h2>' + cwTheme.pickerHTML() + "</div>"
+    + '<div class="card"><h2>This device</h2>'
+    + '<div class="btnrow"><button class="danger" onclick="signOut()">Sign out on this device</button></div></div>';
+}
+function cwThemeChanged() { if (tab() === "settings") renderSettings(); }
+
+// ---------------------------------------------------------------------------
+function formDialog(title, innerHTML, fieldIds, okLabel) {
+  return new Promise((resolve) => {
+    const wrap = document.createElement("div");
+    wrap.id = "cw-modal";
+    wrap.innerHTML = '<div class="cw-card" role="dialog" aria-modal="true" aria-label="' + esc(title) + '">'
+      + '<div class="cw-mtitle">' + esc(title) + "</div>" + innerHTML
+      + '<div class="cw-mbtns"><button type="button" class="cw-cancel">Cancel</button>'
+      + '<button type="button" class="cw-ok">' + esc(okLabel || "Save") + "</button></div></div>";
+    document.body.appendChild(wrap);
+    const finish = (val) => {
+      wrap.classList.remove("in");
+      document.removeEventListener("keydown", onKey, true);
+      setTimeout(() => { if (wrap.parentNode) wrap.parentNode.removeChild(wrap); }, 200);
+      resolve(val);
+    };
+    const collect = () => {
+      const out = {};
+      for (const id of fieldIds) { const el = wrap.querySelector("#" + id); out[id] = el ? el.value : ""; }
+      return out;
+    };
+    const onKey = (e) => { if (e.key === "Escape") { e.preventDefault(); finish(null); } };
+    wrap.querySelector(".cw-ok").addEventListener("click", () => finish(collect()));
+    wrap.querySelector(".cw-cancel").addEventListener("click", () => finish(null));
+    wrap.addEventListener("click", (e) => { if (e.target === wrap) finish(null); });
+    document.addEventListener("keydown", onKey, true);
+    void wrap.offsetWidth;
+    wrap.classList.add("in");
+    const first = wrap.querySelector("#" + fieldIds[0]);
+    setTimeout(() => { try { first && first.focus(); } catch (e) {} }, 60);
+  });
+}
+
+// app-refresh.js drives pull-to-refresh through route(); this console has no
+// service worker of its own to register.
+boot();
+</script>
+<script src="/shared/app-refresh.js"></script>
+<style>
+#cw-modal { position:fixed; inset:0; z-index:2147483001; display:flex; align-items:center; justify-content:center; padding:20px; background:rgba(0,0,0,.5); opacity:0; transition:opacity .2s ease; overflow-y:auto; }
+#cw-modal.in { opacity:1; }
+#cw-modal .cw-card { width:100%; max-width:420px; background:var(--surface); color:var(--text); border:1px solid var(--border); border-radius:16px; box-shadow:var(--shadow); padding:18px; margin:auto; }
+#cw-modal .cw-mtitle { font-weight:700; font-size:16px; margin-bottom:6px; }
+#cw-modal .cw-mbtns { display:flex; gap:10px; justify-content:flex-end; margin-top:16px; }
+#cw-modal .cw-ok { background:var(--primary-bg); color:var(--primary-fg); border-color:transparent; font-weight:600; }
+</style>
+</body>
+</html>

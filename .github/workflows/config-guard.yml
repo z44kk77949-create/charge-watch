@@ -1,0 +1,32 @@
+name: config-guard
+
+# Blocks a whole failure class: a checked-in Cloudflare config file
+# (wrangler.toml and friends) silently becomes the Pages project's source of
+# truth and WIPES the dashboard-managed environment variables and bindings —
+# which is how a sibling app went down at its login gate for over an hour, at
+# night, with nobody able to get back in.
+#
+# Bindings, variables and secrets are configured in the Cloudflare dashboard,
+# and only there. This guard is one of three (see tests/guards.test.mjs for the
+# second); the third is that no deploy step in this repo writes config.
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  guard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Block Cloudflare config-takeover files
+        run: |
+          bad=""
+          for f in wrangler.toml wrangler.json wrangler.jsonc; do
+            [ -e "$f" ] && bad="$bad $f"
+          done
+          if [ -n "$bad" ]; then
+            echo "::error::Forbidden file(s):$bad — a repo-level Cloudflare config overrides the Pages dashboard and destroys its environment variables. Remove the file; configure bindings and variables in the dashboard."
+            exit 1
+          fi
+          echo "config-guard OK: no Cloudflare config files in the repo."

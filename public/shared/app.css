@@ -1,0 +1,206 @@
+/* Charge Watch — the app shell, shared by all three surfaces.
+ *
+ * One stylesheet rather than three inline copies: the customer app, the tent
+ * console and the admin console are the same chassis with different tabs, and
+ * a colour that drifts between them is exactly the kind of thing nobody notices
+ * until the whole family looks unmaintained.
+ *
+ * THEMES. The option names and the Light/Dark palettes match the rest of the
+ * family (Automatic · Light · Dark · brand). The brand theme here is "Charge" —
+ * slate and cyan — which is this app's own identity in the way black-and-gold is
+ * the Safety Watch's. What is per-app is the CHOICE (its own storage key, since
+ * an installed PWA has its own storage); the menu of options never is.
+ *
+ * Every colour below is a token. Nothing in the app hardcodes a hex value.
+ */
+
+:root {                       /* Charge — slate & cyan (the default) */
+  color-scheme: dark;
+  --bg:#0e1216; --surface:#161d23; --surface-2:#1e262e; --field:#1e262e;
+  --text:#e8eef3; --muted:#93a3b0; --border:#2c3841; --divider:#242e36;
+  --accent:#35c9e8; --accent-fg:#06222b;
+  --ok:#5fd68a; --err:#f08a8a; --amber:#e8b45c;
+  --primary-bg:#35c9e8; --primary-fg:#06222b;
+  --appbar-bg:#0a0f13; --appbar-fg:#eaf2f7; --appbar-muted:#8fa0ad;
+  --shadow:0 10px 34px rgba(0,0,0,.55);
+  --pill-green-bg:#16351f; --pill-green-fg:#7fd89b;
+  --pill-amber-bg:#3a2e12; --pill-amber-fg:#e8b45c;
+  --pill-gray-bg:#262f36;  --pill-gray-fg:#9fb0bc;
+  --pill-red-bg:#3d1c1c;   --pill-red-fg:#ef9f9f;
+  --pill-blue-bg:#0f2e38;  --pill-blue-fg:#6fd4ea;
+}
+html[data-theme="dark"] {     /* Dark (neutral) — the family's dark palette */
+  --bg:#131312; --surface:#1d1d1b; --surface-2:#262523; --field:#262523;
+  --text:#ece9e2; --muted:#a4a29a; --border:#33322f; --divider:#2c2b29;
+  --accent:#8dc2f0; --accent-fg:#131312;
+  --primary-bg:#8dc2f0; --primary-fg:#131312;
+}
+html[data-theme="light"] {    /* Light — the family's light palette */
+  color-scheme: light;
+  --bg:#f4f3ef; --surface:#ffffff; --surface-2:#f7f6f1; --field:#ffffff;
+  --text:#1a1a18; --muted:#77766f; --border:#e2e0d8; --divider:#f0efe9;
+  --accent:#185fa5; --accent-fg:#ffffff;
+  --ok:#3b6d11; --err:#a32d2d; --amber:#d98a00;
+  --primary-bg:#1a1a18; --primary-fg:#ffffff;
+  --appbar-bg:#0f1519; --appbar-fg:#eaf2f7; --appbar-muted:#8fa0ad;
+  --shadow:0 10px 30px rgba(0,0,0,.18);
+  --pill-green-bg:#e8f3e0; --pill-green-fg:#3b6d11;
+  --pill-amber-bg:#faeeda; --pill-amber-fg:#854f0b;
+  --pill-gray-bg:#f1efe8;  --pill-gray-fg:#5f5e5a;
+  --pill-red-bg:#f7d4d4;   --pill-red-fg:#791f1f;
+  --pill-blue-bg:#dceef5;  --pill-blue-fg:#12556b;
+}
+
+* { box-sizing:border-box; }
+html, body { height:100%; }
+body {
+  margin:0; background:var(--bg); color:var(--text);
+  font:15px/1.5 -apple-system,"Segoe UI",Roboto,sans-serif;
+  display:flex; flex-direction:column;
+  -webkit-text-size-adjust:100%;
+}
+.hide { display:none !important; }
+
+/* Appbar — dark in every theme; it is the brand. */
+header {
+  background:var(--appbar-bg); color:var(--appbar-fg);
+  border-bottom:2px solid var(--accent);
+  padding:calc(env(safe-area-inset-top,0px) + 10px) 14px 9px;
+  display:flex; align-items:center; justify-content:space-between; gap:10px; flex:0 0 auto;
+}
+header .brand { display:flex; align-items:center; gap:10px; min-width:0; }
+header .mark {
+  width:32px; height:32px; border-radius:9px; flex:none;
+  background:var(--accent); color:var(--accent-fg);
+  display:flex; align-items:center; justify-content:center; font-size:17px;
+}
+header .t { font-weight:700; letter-spacing:.09em; font-size:13px; text-transform:uppercase; white-space:nowrap; }
+header .s { font-size:10.5px; color:var(--appbar-muted); letter-spacing:.04em; }
+header.admin-mode { border-bottom-color:var(--amber); }
+header.admin-mode .mark { background:var(--amber); color:#241a06; }
+.who { font-size:11.5px; color:var(--appbar-muted); max-width:110px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+
+.menu { position:relative; }
+.menu-btn { background:none; border:none; color:var(--appbar-fg); font-size:21px; padding:2px 8px; cursor:pointer; width:auto; }
+.menu-list {
+  position:absolute; right:0; top:34px; background:var(--surface);
+  border:1px solid var(--border); border-radius:11px; box-shadow:var(--shadow);
+  min-width:212px; z-index:60; overflow:hidden;
+}
+.menu-list a { display:block; padding:12px 14px; font-size:14px; color:var(--text); text-decoration:none; border-top:1px solid var(--divider); }
+.menu-list a:first-child { border-top:none; }
+
+main { flex:1 1 auto; overflow-y:auto; -webkit-overflow-scrolling:touch; }
+main .inner { max-width:620px; margin:0 auto; padding:14px 12px calc(24px + env(safe-area-inset-bottom)); }
+
+nav { flex:0 0 auto; background:var(--surface); border-top:1px solid var(--border); display:flex; padding-bottom:env(safe-area-inset-bottom); }
+nav a { flex:1; text-align:center; padding:11px 0 9px; font-size:12.5px; font-weight:600; color:var(--muted); text-decoration:none; border-top:2px solid transparent; }
+nav a.on { color:var(--accent); border-top-color:var(--accent); }
+
+.card { background:var(--surface); border:1px solid var(--border); border-radius:13px; padding:14px; margin-bottom:12px; }
+.card h2 { margin:0 0 8px; font-size:15.5px; }
+.card h3 { margin:14px 0 6px; font-size:13px; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); }
+.muted { color:var(--muted); }
+.small { font-size:12.5px; }
+.tiny { font-size:11.5px; }
+a { color:var(--accent); }
+
+.pill { display:inline-block; padding:2px 9px; border-radius:999px; font-size:11.5px; font-weight:600; }
+.pill.green { background:var(--pill-green-bg); color:var(--pill-green-fg); }
+.pill.amber { background:var(--pill-amber-bg); color:var(--pill-amber-fg); }
+.pill.gray  { background:var(--pill-gray-bg);  color:var(--pill-gray-fg); }
+.pill.red   { background:var(--pill-red-bg);   color:var(--pill-red-fg); }
+.pill.blue  { background:var(--pill-blue-bg);  color:var(--pill-blue-fg); }
+
+button {
+  font:inherit; padding:10px 14px; border-radius:10px;
+  border:1px solid var(--border); background:var(--surface-2); color:var(--text);
+  cursor:pointer; width:auto; -webkit-tap-highlight-color:transparent;
+}
+button.primary { background:var(--primary-bg); border-color:transparent; color:var(--primary-fg); font-weight:700; }
+button.danger { background:var(--err); border-color:transparent; color:#fff; font-weight:600; }
+button.ghost { background:none; }
+button.wide { width:100%; }
+button.small { padding:6px 11px; font-size:12.5px; border-radius:8px; }
+button:disabled { opacity:.55; cursor:default; }
+.btnrow { display:flex; gap:8px; flex-wrap:wrap; }
+.btnrow.end { justify-content:flex-end; }
+
+label { display:block; font-size:12.5px; font-weight:600; color:var(--muted); margin:12px 0 4px; }
+label.inline { display:flex; align-items:center; gap:9px; font-size:14px; font-weight:500; color:var(--text); margin:10px 0; }
+label.inline input { width:auto; margin:0; }
+input, select, textarea {
+  width:100%; font:inherit; background:var(--field); color:var(--text);
+  border:1px solid var(--border); border-radius:10px; padding:11px 12px;
+}
+input:focus, select:focus, textarea:focus { outline:2px solid var(--accent); outline-offset:-1px; border-color:var(--accent); }
+textarea { min-height:78px; resize:vertical; }
+.hint { font-size:11.5px; color:var(--muted); margin-top:4px; }
+.msg { font-size:13px; margin-top:10px; }
+.msg.err { color:var(--err); }
+.msg.ok { color:var(--ok); }
+
+/* A monospaced field for codes — tall, wide-tracked, and easy to check by eye. */
+.codefield {
+  font:700 24px/1.2 ui-monospace,SFMono-Regular,Menlo,monospace;
+  letter-spacing:.16em; text-align:center; padding:14px 10px;
+}
+
+.row { display:flex; gap:10px; align-items:flex-start; padding:11px 0; border-bottom:1px solid var(--divider); }
+.row:last-child { border-bottom:0; }
+.row .grow { flex:1; min-width:0; }
+.row .ref { font:600 13px/1.3 ui-monospace,SFMono-Regular,Menlo,monospace; color:var(--muted); }
+.row .title { font-weight:600; font-size:14.5px; overflow-wrap:anywhere; }
+
+.chips { display:flex; gap:7px; flex-wrap:wrap; margin-bottom:12px; }
+.chip {
+  padding:6px 12px; border-radius:999px; font-size:12.5px; font-weight:600;
+  border:1px solid var(--border); background:var(--surface); color:var(--muted); cursor:pointer;
+}
+.chip.on { background:var(--accent); border-color:var(--accent); color:var(--accent-fg); }
+
+.grid2 { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+@media (max-width:420px) { .grid2 { grid-template-columns:1fr; } }
+
+.stat { text-align:center; padding:10px 6px; background:var(--surface-2); border-radius:11px; }
+.stat .n { font-size:23px; font-weight:800; line-height:1.1; }
+.stat .k { font-size:11px; color:var(--muted); text-transform:uppercase; letter-spacing:.05em; margin-top:3px; }
+
+.empty { text-align:center; padding:34px 18px; color:var(--muted); }
+.empty .mk { font-size:26px; opacity:.6; margin-bottom:8px; }
+
+/* The status banner on a customer's charger card — the one thing they open the
+   app to see, so it is the largest element on the screen. */
+.status-hero { text-align:center; padding:18px 12px 14px; border-radius:12px; margin:-4px -4px 12px; }
+.status-hero .st { font-size:22px; font-weight:800; letter-spacing:.05em; text-transform:uppercase; }
+.status-hero .sub { font-size:13px; margin-top:5px; opacity:.85; }
+.status-hero.ready    { background:var(--pill-green-bg); color:var(--pill-green-fg); }
+.status-hero.charging { background:var(--pill-amber-bg); color:var(--pill-amber-fg); }
+.status-hero.received { background:var(--pill-blue-bg);  color:var(--pill-blue-fg); }
+.status-hero.held     { background:var(--pill-red-bg);   color:var(--pill-red-fg); }
+.status-hero.collected{ background:var(--pill-gray-bg);  color:var(--pill-gray-fg); }
+
+/* QR presentation. White plate in every theme — a scanner needs the contrast,
+   and a dark-themed QR on an OLED phone at night is a genuinely harder read. */
+.qr-plate { background:#fff; border-radius:14px; padding:12px; margin:0 auto; max-width:280px; }
+.qr-plate svg { display:block; width:100%; height:auto; }
+
+/* Pull-to-refresh indicator (shared/app-refresh.js drives it). */
+#ptr { position:fixed; left:50%; transform:translateX(-50%); top:-46px; z-index:900; transition:top .18s ease, opacity .18s ease; opacity:0; pointer-events:none; }
+#ptr .disc {
+  width:34px; height:34px; border-radius:50%; background:var(--surface); border:1px solid var(--border);
+  box-shadow:var(--shadow); color:var(--accent);
+  display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:700;
+}
+#ptr .disc.spin { border-top-color:var(--accent); animation:cw-spin .8s linear infinite; }
+@keyframes cw-spin { to { transform:rotate(360deg); } }
+
+/* Print: the intake slip, and nothing else on the page. */
+@media print {
+  header, nav, .noprint, #cw-toasts { display:none !important; }
+  body, main, main .inner { background:#fff !important; color:#000 !important; display:block !important; overflow:visible !important; }
+  .card { border:1px solid #999 !important; box-shadow:none !important; page-break-inside:avoid; }
+  .qr-plate { max-width:230px; }
+}
+
+@media (prefers-reduced-motion: reduce) { * { animation:none !important; transition:none !important; } }

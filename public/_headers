@@ -1,0 +1,35 @@
+# Cloudflare Pages response headers.
+#
+# The app shell, its code and the manifests always revalidate, so a plain
+# refresh — or a PWA relaunch at the start of a shift — picks up the newest
+# deploy instead of a cached copy. "no-cache" still stores the file: an
+# unchanged one is a cheap 304, a changed one is fetched at once. The service
+# worker caches nothing, so this is the only cache layer in play.
+
+/
+  Cache-Control: no-cache
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: same-origin
+  X-Frame-Options: DENY
+/index.html
+  Cache-Control: no-cache
+/tent/
+  Cache-Control: no-cache
+/tent/index.html
+  Cache-Control: no-cache
+/admin/
+  Cache-Control: no-cache
+/admin/index.html
+  Cache-Control: no-cache
+/sw.js
+  Cache-Control: no-cache
+/manifest.json
+  Cache-Control: no-cache
+/tent/manifest.json
+  Cache-Control: no-cache
+/admin/manifest.json
+  Cache-Control: no-cache
+/shared/*
+  Cache-Control: no-cache
+/icons/*
+  Cache-Control: public, max-age=86400

@@ -1,0 +1,525 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="charge">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content">
+<title>Charge Watch</title>
+<meta name="description" content="Track your portable charger and collect it when it's ready.">
+<link rel="manifest" href="/manifest.json">
+<link rel="icon" href="/icons/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<meta name="theme-color" content="#0a0f13">
+<!-- Theme before first paint. This must stay inline and ahead of the stylesheet:
+     applying it from theme.js instead arrives a frame late and flashes white. -->
+<script>(function(){try{var t=localStorage.getItem('cw_theme')||'charge';if(t==='auto')t=matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light';if(['light','dark','charge'].indexOf(t)<0)t='charge';document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
+<link rel="stylesheet" href="/shared/app.css">
+</head>
+<body>
+<header>
+  <div class="brand">
+    <span class="mark" aria-hidden="true">⚡</span>
+    <div><div class="t">Charge Watch</div><div class="s" id="hdr-sub">Portable charger tracking</div></div>
+  </div>
+  <span style="display:flex;align-items:center;gap:2px;">
+    <span class="who" id="who"></span>
+    <span class="menu"><button class="menu-btn" onclick="toggleMenu(event)" aria-label="Menu" aria-haspopup="true">&#8942;</button>
+      <div class="menu-list hide" id="menu">
+        <a href="#me">Settings</a>
+        <a href="#" id="menu-install" class="hide" onclick="installApp();return false;">Add to Home Screen</a>
+        <a href="#" onclick="signOut();return false;">Sign out on this device</a>
+      </div></span></span>
+</header>
+
+<main><div class="inner" id="view"></div></main>
+
+<nav id="nav" class="hide">
+  <a href="#home" data-t="home">My chargers</a>
+  <a href="#collect" data-t="collect">Collect</a>
+  <a href="#me" data-t="me">Me</a>
+</nav>
+
+<script src="/shared/core.js"></script>
+<script src="/shared/dialog.js"></script>
+<script src="/shared/theme.js"></script>
+<script src="/shared/qr.js"></script>
+<script>
+// Charge Watch — the customer's app.
+//
+// The whole surface answers one question ("where is my charger and can I have
+// it back yet"), so it is three tabs and no more: what I handed in, the code I
+// show to get it back, and my settings.
+//
+// Sign-in is a claim code, arriving one of two ways: typed from the paper slip,
+// or in the URL fragment when the slip's QR is scanned with a phone's own
+// camera. That second path is why there is no app to install before you can use
+// this — the camera opens a link, the link signs you in.
+
+cwTheme.init("cw_theme");
+
+const V = document.getElementById("view");
+let ME = null, TICKETS = [], SELECTED = null, TICKET_TIMER = null;
+
+const TABS = ["home", "collect", "me"];
+function tab() { const h = (location.hash || "#home").slice(1).split("?")[0]; return TABS.includes(h) ? h : "home"; }
+function setNav() { document.querySelectorAll("nav a").forEach(a => a.classList.toggle("on", a.dataset.t === tab())); }
+
+function toggleMenu(e) { e.preventDefault(); e.stopPropagation(); document.getElementById("menu").classList.toggle("hide"); }
+function closeMenu() { document.getElementById("menu").classList.add("hide"); }
+document.addEventListener("click", closeMenu);
+
+// ---------------------------------------------------------------------------
+// Boot
+// ---------------------------------------------------------------------------
+async function boot() {
+  // A scanned slip lands here as /#c=CODE. Consume it before anything else,
+  // and strip it from the address bar straight away so the code doesn't sit in
+  // history or get shared with a screenshot of the URL.
+  const m = (location.hash || "").match(/[#&]c=([0-9A-Za-z-]{8,20})/);
+  if (m) {
+    const claimCode = m[1];
+    history.replaceState(null, "", location.pathname);
+    await redeem(claimCode, true);
+    return;
+  }
+  if (!code()) return renderSignIn();
+  await load();
+}
+
+async function load(quiet) {
+  if (!quiet) V.innerHTML = cwSkeleton({ cards: 2, lines: 4 });
+  const [me, mine] = await Promise.all([api("/api/me"), api("/api/mine")]);
+  if (me && me.__neterr) { V.innerHTML = cwLoadError(() => load()); return; }
+  if (!me.ok) { try { localStorage.removeItem("cw_code"); } catch (e) {} return renderSignIn(me.event_name); }
+  ME = me;
+  TICKETS = (mine && mine.ok && Array.isArray(mine.tickets)) ? mine.tickets : [];
+  document.getElementById("hdr-sub").textContent = me.event_name || "Portable charger tracking";
+  document.getElementById("who").textContent = me.display_name || "";
+  document.getElementById("nav").classList.remove("hide");
+  route();
+}
+
+function route() {
+  if (!code()) return renderSignIn();
+  if (!ME) return load();
+  setNav();
+  closeMenu();
+  stopTicketTimer();
+  const t = tab();
+  if (t === "home") renderHome();
+  else if (t === "collect") renderCollect();
+  else renderMe();
+  try { window.scrollTo(0, 0); } catch (e) {}
+}
+window.addEventListener("hashchange", route);
+
+// Re-render on focus so a charger that went ready while the phone was in a
+// pocket is current the moment it comes out of it.
+cwTabRefresh(() => { if (code() && ME) load(true); }, { minMs: 45000 });
+
+// ---------------------------------------------------------------------------
+// Sign in
+// ---------------------------------------------------------------------------
+function renderSignIn(eventName) {
+  document.getElementById("nav").classList.add("hide");
+  document.getElementById("who").textContent = "";
+  V.innerHTML =
+    '<div class="card">'
+    + '<h2>Find your charger</h2>'
+    + '<p class="muted small" style="margin:0 0 4px;">Enter the collection code from the slip the tent gave you. It looks like <strong>ABCD-EFGH</strong>.</p>'
+    + '<label for="cc">Collection code</label>'
+    + '<input id="cc" class="codefield" inputmode="latin" autocapitalize="characters" autocomplete="one-time-code" spellcheck="false" maxlength="9" placeholder="ABCD-EFGH" aria-label="Collection code">'
+    + '<div class="msg err hide" id="cc-err" role="alert"></div>'
+    + '<button class="primary wide" style="margin-top:14px;" onclick="submitCode()">Continue</button>'
+    + '<p class="hint" style="margin-top:14px;">Scanning the QR on your slip with your phone camera signs you in without typing anything.</p>'
+    + '</div>'
+    + '<div class="card"><h2>What this is</h2>'
+    + '<p class="muted small" style="margin:0;">The charging tent looks after your power bank while it charges. This page shows when it is ready, and gives you the code to collect it. You can also get a message the moment it is done.</p></div>';
+
+  const input = document.getElementById("cc");
+  // Format as they type ("ABCD-EFGH") without fighting a backspace through the
+  // separator, and submit on Enter.
+  input.addEventListener("input", () => {
+    const raw = input.value.toUpperCase().replace(/[^0-9A-Z]/g, "").slice(0, 8);
+    input.value = raw.length > 4 ? raw.slice(0, 4) + "-" + raw.slice(4) : raw;
+  });
+  input.addEventListener("keydown", (e) => { if (e.key === "Enter") submitCode(); });
+  setTimeout(() => { try { input.focus(); } catch (e) {} }, 60);
+}
+
+function signInError(msg) {
+  const el = document.getElementById("cc-err");
+  if (!el) return cwToast(msg, { type: "err" });
+  el.textContent = msg; el.classList.remove("hide");
+}
+
+async function submitCode() {
+  const input = document.getElementById("cc");
+  const val = (input && input.value || "").trim();
+  if (!val) return signInError("Enter the code from your slip.");
+  await redeem(val, false);
+}
+
+async function redeem(claimCode, fromLink) {
+  const r = await fetch("/api/auth", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action: "claim", claim_code: claimCode, code: code() || undefined }),
+  }).then(x => x.json()).catch(() => ({ ok: false, error: "Network error — check your connection." }));
+
+  if (!r.ok) {
+    // A bad code from a scanned link has no form behind it yet, so paint the
+    // sign-in screen first and put the message into it.
+    if (fromLink) { renderSignIn(); setTimeout(() => signInError(r.error || "That code didn't work."), 30); }
+    else signInError(r.error || "That code didn't work.");
+    return;
+  }
+  try { localStorage.setItem("cw_code", r.token); } catch (e) {}
+  await load();
+  cwToast(r.created ? "Your charger is linked to this phone." : `Charger ${r.ticket_ref} found.`, { type: "ok" });
+}
+
+async function signOut() {
+  closeMenu();
+  if (!(await cwConfirm("You'll need your collection code to sign back in. Your charger is unaffected.", { title: "Sign out on this device?", ok: "Sign out", cancel: "Stay", danger: true }))) return;
+  await post("/api/auth", { action: "logout" });
+  try { localStorage.removeItem("cw_code"); } catch (e) {}
+  ME = null; TICKETS = [];
+  location.hash = "#home";
+  renderSignIn();
+}
+
+// ---------------------------------------------------------------------------
+// My chargers
+// ---------------------------------------------------------------------------
+const STATUS_CLASS = { ready: "ready", charging: "charging", received: "received", held: "held", collected: "collected" };
+const STATUS_SUB = {
+  received: "Booked in and waiting for a free charging point.",
+  charging: "On charge now — we'll tell you the moment it's done.",
+  ready: "Come and collect it whenever you like.",
+  held: "The tent needs a word with you about this one.",
+  collected: "Handed back to you.",
+};
+
+function ticketCard(t, opts) {
+  opts = opts || {};
+  const cls = STATUS_CLASS[t.status] || "received";
+  const where = [t.tent_name, t.tent_location].filter(Boolean).join(" — ");
+  const rows = [];
+  if (t.label) rows.push(["Tag on your charger", t.label]);
+  if (t.device_desc) rows.push(["Description", t.device_desc]);
+  if (where) rows.push(["Where", where]);
+  if (t.slot) rows.push(["Charging point", t.slot]);
+  rows.push(["Handed in", fmt(t.received_at)]);
+  if (t.ready_at) rows.push(["Ready since", fmt(t.ready_at)]);
+  if (t.collected_at) rows.push(["Collected", fmt(t.collected_at)]);
+
+  return '<div class="card">'
+    + `<div class="status-hero ${cls}"><div class="st">${esc(t.status_label)}</div>`
+    + `<div class="sub">${esc(STATUS_SUB[t.status] || "")}</div></div>`
+    + `<div class="row"><div class="grow"><div class="ref">${esc(t.ref)}</div></div></div>`
+    + rows.map(([k, v]) => `<div class="row"><div class="grow small muted">${esc(k)}</div><div class="small" style="text-align:right;">${esc(v)}</div></div>`).join("")
+    + (t.notes ? `<p class="small muted" style="margin:10px 0 0;">${esc(t.notes)}</p>` : "")
+    + (opts.collectLink && t.status !== "collected"
+        ? `<div class="btnrow" style="margin-top:12px;"><button class="primary wide" onclick="showCollect('${esc(t.id)}')">Show my collection code</button></div>`
+        : "")
+    + "</div>";
+}
+
+function renderHome() {
+  const open = TICKETS.filter(t => t.status !== "collected");
+  const done = TICKETS.filter(t => t.status === "collected");
+
+  let html = "";
+  if (!TICKETS.length) {
+    html += '<div class="card"><div class="empty"><div class="mk">⚡</div>'
+      + "<p>Nothing linked to this phone yet.</p>"
+      + '<button class="primary" style="margin-top:8px;" onclick="addCharger()">Add a charger</button></div></div>';
+  } else {
+    html += open.map(t => ticketCard(t, { collectLink: true })).join("");
+    if (!open.length) html += '<div class="card"><div class="empty"><div class="mk">✓</div><p>Nothing of yours is in a tent right now.</p></div></div>';
+    html += '<div class="btnrow" style="margin-bottom:12px;"><button class="wide" onclick="addCharger()">Add another charger</button></div>';
+    if (done.length) {
+      html += `<h3 style="margin:18px 0 6px;color:var(--muted);font-size:13px;text-transform:uppercase;letter-spacing:.06em;">Collected (${done.length})</h3>`;
+      html += done.map(t => ticketCard(t, {})).join("");
+    }
+  }
+  V.innerHTML = html;
+}
+
+async function addCharger() {
+  const codeIn = await promptCode("Add another charger", "Enter the collection code from its slip.");
+  if (!codeIn) return;
+  const r = await post("/api/mine", { action: "add", claim_code: codeIn });
+  if (!r.ok) return cwToast(r.error || "That code didn't work.", { type: "err" });
+  cwToast(r.already ? "That charger is already on this phone." : `Charger ${r.ref} added.`, { type: "ok" });
+  await load(true);
+}
+
+// A small themed prompt — there is no house `cwPrompt`, and a native prompt()
+// would freeze the thread and ignore the theme like the alerts it replaced.
+function promptCode(title, message) {
+  return new Promise((resolve) => {
+    const wrap = document.createElement("div");
+    wrap.id = "cw-modal";
+    wrap.innerHTML = '<div class="cw-card" role="dialog" aria-modal="true" aria-label="' + esc(title) + '">'
+      + '<div class="cw-mtitle">' + esc(title) + "</div>"
+      + '<div class="cw-mmsg">' + esc(message) + "</div>"
+      + '<input id="cw-prompt-in" class="codefield" style="margin-top:12px;" inputmode="latin" autocapitalize="characters" spellcheck="false" maxlength="9" placeholder="ABCD-EFGH" aria-label="Collection code">'
+      + '<div class="cw-mbtns"><button type="button" class="cw-cancel">Cancel</button><button type="button" class="cw-ok">Add</button></div></div>';
+    document.body.appendChild(wrap);
+    const input = wrap.querySelector("#cw-prompt-in");
+    input.addEventListener("input", () => {
+      const raw = input.value.toUpperCase().replace(/[^0-9A-Z]/g, "").slice(0, 8);
+      input.value = raw.length > 4 ? raw.slice(0, 4) + "-" + raw.slice(4) : raw;
+    });
+    const finish = (val) => {
+      wrap.classList.remove("in");
+      document.removeEventListener("keydown", onKey, true);
+      setTimeout(() => { if (wrap.parentNode) wrap.parentNode.removeChild(wrap); }, 200);
+      resolve(val);
+    };
+    const onKey = (e) => {
+      if (e.key === "Escape") { e.preventDefault(); finish(null); }
+      else if (e.key === "Enter") { e.preventDefault(); finish(input.value.trim() || null); }
+    };
+    wrap.querySelector(".cw-ok").addEventListener("click", () => finish(input.value.trim() || null));
+    wrap.querySelector(".cw-cancel").addEventListener("click", () => finish(null));
+    wrap.addEventListener("click", (e) => { if (e.target === wrap) finish(null); });
+    document.addEventListener("keydown", onKey, true);
+    void wrap.offsetWidth;
+    wrap.classList.add("in");
+    setTimeout(() => { try { input.focus(); } catch (e) {} }, 60);
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Collect — the code shown at the counter
+// ---------------------------------------------------------------------------
+function showCollect(id) { SELECTED = id; location.hash = "#collect"; }
+
+function stopTicketTimer() { if (TICKET_TIMER) { clearInterval(TICKET_TIMER); TICKET_TIMER = null; } }
+
+function renderCollect() {
+  const open = TICKETS.filter(t => t.status !== "collected");
+  if (!open.length) {
+    V.innerHTML = '<div class="card"><div class="empty"><div class="mk">⚡</div>'
+      + "<p>Nothing to collect right now.</p>"
+      + '<p class="small">When a charger of yours is in a tent, your code appears here.</p></div></div>';
+    return;
+  }
+  if (!SELECTED || !open.some(t => t.id === SELECTED)) SELECTED = open[0].id;
+  const t = open.find(x => x.id === SELECTED);
+
+  let html = "";
+  if (open.length > 1) {
+    html += '<div class="chips">' + open.map(x =>
+      `<button type="button" class="chip${x.id === SELECTED ? " on" : ""}" onclick="SELECTED='${esc(x.id)}';renderCollect();">${esc(x.label ? "Tag " + x.label : x.ref)}</button>`
+    ).join("") + "</div>";
+  }
+
+  const ready = t.status === "ready";
+  html += '<div class="card">'
+    + `<div class="status-hero ${STATUS_CLASS[t.status] || "received"}"><div class="st">${esc(t.status_label)}</div>`
+    + `<div class="sub">${ready ? "Show this at the counter" : "You can still collect it early — show this at the counter"}</div></div>`;
+
+  if (t.collect_qr) {
+    html += `<div class="qr-plate" id="qr-plate">${cwQr.svg(t.collect_qr, { label: "Collection code for " + t.ref })}</div>`
+      + '<div style="text-align:center;margin-top:14px;">'
+      + `<div class="tiny muted" style="text-transform:uppercase;letter-spacing:.08em;">Ticket ${esc(t.ref)}</div>`
+      + `<div style="font:800 34px/1.2 ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:.14em;margin-top:4px;" id="collect-digits">${esc(t.collect_code || "")}</div>`
+      + '<div class="tiny muted" id="collect-exp"></div>'
+      + "</div>";
+  } else {
+    html += '<p class="muted small">Your code isn\'t available right now. Show your ticket number and the tag on your charger at the counter.</p>';
+  }
+
+  const where = [t.tent_name, t.tent_location].filter(Boolean).join(" — ");
+  html += '<div style="margin-top:16px;">'
+    + (where ? `<div class="row"><div class="grow small muted">Collect at</div><div class="small" style="text-align:right;">${esc(where)}</div></div>` : "")
+    + (t.label ? `<div class="row"><div class="grow small muted">Tag</div><div class="small" style="text-align:right;">${esc(t.label)}</div></div>` : "")
+    + "</div>"
+    + '<p class="hint" style="margin-top:14px;">The code changes every few minutes — that\'s normal. Keep this screen open at the counter, or read the six digits out.</p>'
+    + "</div>";
+
+  V.innerHTML = html;
+  startCountdown(t);
+}
+
+// Count the current code down, and fetch a fresh one when it lapses — so a
+// screen left open in a queue is never showing something the counter rejects.
+function startCountdown(t) {
+  stopTicketTimer();
+  if (!t.collect_expires_in) return;
+  let left = Math.max(0, Math.floor(t.collect_expires_in / 1000));
+  const paint = () => {
+    const el = document.getElementById("collect-exp");
+    if (!el) { stopTicketTimer(); return; }
+    el.textContent = left > 0 ? `New code in ${Math.floor(left / 60)}:${String(left % 60).padStart(2, "0")}` : "Refreshing…";
+    if (left <= 0) { stopTicketTimer(); load(true); return; }
+    left--;
+  };
+  paint();
+  TICKET_TIMER = setInterval(paint, 1000);
+}
+
+// ---------------------------------------------------------------------------
+// Me
+// ---------------------------------------------------------------------------
+function renderMe() {
+  const tgLinked = !!ME.telegram_linked;
+  const canPush = "serviceWorker" in navigator && "PushManager" in window && !!ME.vapid_public;
+
+  V.innerHTML =
+    '<div class="card"><h2>Telling you when it\'s ready</h2>'
+    + '<p class="muted small" style="margin:0 0 6px;">Pick how you\'d like to hear. You can always just open this app and look.</p>'
+
+    + "<h3>Telegram</h3>"
+    + (ME.telegram_bot
+        ? (tgLinked
+            ? '<p class="small" style="margin:0;"><span class="pill green">Connected</span> Messages go to your Telegram.</p>'
+              + '<div class="btnrow" style="margin-top:10px;"><button class="small" onclick="unlinkTelegram()">Disconnect</button></div>'
+            : `<p class="small muted" style="margin:0 0 10px;">Open the bot and it links itself to this account.</p>`
+              + `<a class="btnlink" href="https://t.me/${esc(ME.telegram_bot)}?start=${encodeURIComponent(ME.pair_token || "")}" target="_blank" rel="noopener">`
+              + '<button class="primary wide">Connect Telegram</button></a>')
+        : '<p class="small muted" style="margin:0;">Not set up for this event.</p>')
+
+    + "<h3>On this phone</h3>"
+    + (canPush
+        ? '<label class="inline"><input type="checkbox" id="np" ' + (ME.notify_push ? "checked" : "") + ' onchange="togglePush(this)"> Notifications on this device</label>'
+          + '<p class="hint" id="push-hint"></p>'
+        : '<p class="small muted" style="margin:0;">Add this app to your Home Screen first, then notifications can be switched on here.</p>')
+
+    + "</div>"
+
+    + '<div class="card"><h2>Your name</h2>'
+    + '<p class="muted small" style="margin:0 0 4px;">Only used so the tent can find your charger if you lose your code. Leave it blank if you\'d rather not.</p>'
+    + `<input id="dn" maxlength="60" value="${esc(ME.display_name || "")}" placeholder="What should we call you?" aria-label="Your name">`
+    + '<div class="btnrow" style="margin-top:10px;"><button class="primary" onclick="saveProfile()">Save</button></div></div>'
+
+    + '<div class="card"><h2>Appearance</h2>' + cwTheme.pickerHTML() + "</div>"
+
+    + '<div class="card"><h2>This device</h2>'
+    + '<p class="muted small" style="margin:0 0 10px;">Signing out doesn\'t affect your charger — you can sign back in with your collection code.</p>'
+    + '<div class="btnrow"><button class="danger" onclick="signOut()">Sign out on this device</button></div></div>'
+
+    + '<div class="card"><h2>About</h2>'
+    + `<p class="muted small" style="margin:0;">Charge Watch${ME.event_name ? " · " + esc(ME.event_name) : ""}</p></div>`;
+
+  if (canPush) refreshPushHint();
+}
+function cwThemeChanged() { if (tab() === "me") renderMe(); }
+
+async function saveProfile() {
+  const name = (document.getElementById("dn") || {}).value || "";
+  const r = await post("/api/mine", { action: "profile", display_name: name, notify_telegram: ME.notify_telegram, notify_push: ME.notify_push });
+  if (!r.ok) return cwToast(r.error || "Couldn't save that.", { type: "err" });
+  ME.display_name = name.trim();
+  document.getElementById("who").textContent = ME.display_name || "";
+  cwToast("Saved.", { type: "ok" });
+}
+
+async function unlinkTelegram() {
+  if (!(await cwConfirm("You'll stop getting Telegram messages about your charger.", { title: "Disconnect Telegram?", ok: "Disconnect", danger: true }))) return;
+  const r = await post("/api/mine", { action: "unlink_telegram" });
+  if (!r.ok) return cwToast(r.error || "Couldn't disconnect.", { type: "err" });
+  ME.telegram_linked = false;
+  renderMe();
+  cwToast("Disconnected.", { type: "ok" });
+}
+
+// ---------------------------------------------------------------------------
+// Web push
+// ---------------------------------------------------------------------------
+function urlBase64ToUint8Array(base64String) {
+  const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
+  const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
+  const raw = atob(base64);
+  const out = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; i++) out[i] = raw.charCodeAt(i);
+  return out;
+}
+
+function refreshPushHint() {
+  const el = document.getElementById("push-hint");
+  if (!el) return;
+  const p = (typeof Notification !== "undefined") ? Notification.permission : "default";
+  el.textContent = p === "denied"
+    ? "Your browser is blocking notifications for this site — allow them in its settings to turn this on."
+    : (ME.notify_push ? "" : "Off — you'll still see the status when you open the app.");
+}
+
+async function togglePush(el) {
+  const want = el.checked;
+  if (!want) {
+    await post("/api/mine", { action: "profile", display_name: ME.display_name || "", notify_telegram: ME.notify_telegram, notify_push: false });
+    ME.notify_push = false;
+    try {
+      const reg = await navigator.serviceWorker.ready;
+      const sub = await reg.pushManager.getSubscription();
+      if (sub) { await post("/api/push-subscribe", { action: "unsubscribe", endpoint: sub.endpoint }); await sub.unsubscribe(); }
+    } catch (e) {}
+    refreshPushHint();
+    return;
+  }
+
+  // Asking is the part that can fail in several ordinary ways (declined, a
+  // browser that blocks it, no service worker yet) — each gets its own honest
+  // message rather than a silent un-tick.
+  try {
+    const perm = await Notification.requestPermission();
+    if (perm !== "granted") { el.checked = false; refreshPushHint(); return cwToast("Notifications weren't allowed.", { type: "err" }); }
+    const reg = await navigator.serviceWorker.ready;
+    const sub = await reg.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: urlBase64ToUint8Array(ME.vapid_public),
+    });
+    const r = await post("/api/push-subscribe", { subscription: sub.toJSON() });
+    if (!r.ok) throw new Error(r.error || "save failed");
+    await post("/api/mine", { action: "profile", display_name: ME.display_name || "", notify_telegram: ME.notify_telegram, notify_push: true });
+    ME.notify_push = true;
+    refreshPushHint();
+    cwToast("We'll buzz this phone when your charger is ready.", { type: "ok" });
+  } catch (e) {
+    el.checked = false;
+    refreshPushHint();
+    cwToast("Couldn't switch notifications on here.", { type: "err" });
+  }
+}
+
+// ---------------------------------------------------------------------------
+// PWA
+// ---------------------------------------------------------------------------
+let deferredInstall = null;
+window.addEventListener("beforeinstallprompt", (e) => {
+  e.preventDefault(); deferredInstall = e;
+  document.getElementById("menu-install").classList.remove("hide");
+});
+async function installApp() {
+  closeMenu();
+  if (!deferredInstall) return cwToast("Use your browser's Share menu → Add to Home Screen.", { dur: 5000 });
+  deferredInstall.prompt();
+  await deferredInstall.userChoice.catch(() => {});
+  deferredInstall = null;
+  document.getElementById("menu-install").classList.add("hide");
+}
+if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {});
+
+boot();
+</script>
+<script src="/shared/app-refresh.js"></script>
+<style>
+/* The prompt built above reuses the dialog module's look; these are the two
+   classes it adds on top of what dialog.js already defines. */
+#cw-modal { position:fixed; inset:0; z-index:2147483001; display:flex; align-items:center; justify-content:center; padding:20px; background:rgba(0,0,0,.5); opacity:0; transition:opacity .2s ease; }
+#cw-modal.in { opacity:1; }
+#cw-modal .cw-card { width:100%; max-width:400px; background:var(--surface); color:var(--text); border:1px solid var(--border); border-radius:16px; box-shadow:var(--shadow); padding:18px; }
+#cw-modal .cw-mtitle { font-weight:700; font-size:16px; margin-bottom:6px; }
+#cw-modal .cw-mmsg { font-size:14px; color:var(--muted); }
+#cw-modal .cw-mbtns { display:flex; gap:10px; justify-content:flex-end; margin-top:16px; }
+#cw-modal .cw-ok { background:var(--primary-bg); color:var(--primary-fg); border-color:transparent; font-weight:600; }
+.btnlink { text-decoration:none; display:block; }
+</style>
+</body>
+</html>
