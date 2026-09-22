@@ -31,5 +31,11 @@
   Cache-Control: no-cache
 /shared/*
   Cache-Control: no-cache
+# Icons revalidate too. A day of caching is right for a settled app and wrong
+# while the brand is still being decided — a changed icon that won't appear for
+# 24 hours reads as "the deploy didn't work". They are a couple of KB each, so
+# revalidating costs nothing worth saving.
+# NOTE: this does NOT refresh an icon already on a phone's home screen. An
+# installed PWA keeps the icon it was installed with; remove it and re-add.
 /icons/*
-  Cache-Control: public, max-age=86400
+  Cache-Control: no-cache
