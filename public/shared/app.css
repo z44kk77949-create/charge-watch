@@ -6,28 +6,28 @@
  * until the whole family looks unmaintained.
  *
  * THEMES. The option names and the Light/Dark palettes match the rest of the
- * family (Automatic · Light · Dark · brand). The brand theme here is "Charge" —
- * slate and cyan — which is this app's own identity in the way black-and-gold is
- * the Safety Watch's. What is per-app is the CHOICE (its own storage key, since
- * an installed PWA has its own storage); the menu of options never is.
+ * family: Automatic · Light · Dark · Leopard, the last being the black-and-gold
+ * brand the family shares, same name and same palette everywhere. What is
+ * per-app is the CHOICE (its own storage key, since an installed PWA has its
+ * own storage); the menu of options never is.
  *
  * Every colour below is a token. Nothing in the app hardcodes a hex value.
  */
 
-:root {                       /* Charge — slate & cyan (the default) */
+:root {                       /* Leopard — black & gold (the default) */
   color-scheme: dark;
-  --bg:#0e1216; --surface:#161d23; --surface-2:#1e262e; --field:#1e262e;
-  --text:#e8eef3; --muted:#93a3b0; --border:#2c3841; --divider:#242e36;
-  --accent:#35c9e8; --accent-fg:#06222b;
-  --ok:#5fd68a; --err:#f08a8a; --amber:#e8b45c;
-  --primary-bg:#35c9e8; --primary-fg:#06222b;
-  --appbar-bg:#0a0f13; --appbar-fg:#eaf2f7; --appbar-muted:#8fa0ad;
-  --shadow:0 10px 34px rgba(0,0,0,.55);
-  --pill-green-bg:#16351f; --pill-green-fg:#7fd89b;
-  --pill-amber-bg:#3a2e12; --pill-amber-fg:#e8b45c;
-  --pill-gray-bg:#262f36;  --pill-gray-fg:#9fb0bc;
-  --pill-red-bg:#3d1c1c;   --pill-red-fg:#ef9f9f;
-  --pill-blue-bg:#0f2e38;  --pill-blue-fg:#6fd4ea;
+  --bg:#0d0d0b; --surface:#17170f; --surface-2:#201f14; --field:#201f14;
+  --text:#f2ede0; --muted:#b3a986; --border:#3a3622; --divider:#2b2818;
+  --accent:#f0b52e; --accent-fg:#17130a;
+  --ok:#9bd36f; --err:#ef9f9f; --amber:#e6b25c;
+  --primary-bg:#f0b52e; --primary-fg:#17130a;
+  --appbar-bg:#0e0e0a; --appbar-fg:#f0eee6; --appbar-muted:#a6a495;
+  --shadow:0 10px 34px rgba(0,0,0,.6);
+  --pill-green-bg:#22381a; --pill-green-fg:#a7d18a;
+  --pill-amber-bg:#3d2f12; --pill-amber-fg:#e9b95c;
+  --pill-gray-bg:#2c2b29;  --pill-gray-fg:#b4b2a9;
+  --pill-red-bg:#401d1d;   --pill-red-fg:#e79c9c;
+  --pill-blue-bg:#1f2a30;  --pill-blue-fg:#9ec4d4;
 }
 html[data-theme="dark"] {     /* Dark (neutral) — the family's dark palette */
   --bg:#131312; --surface:#1d1d1b; --surface-2:#262523; --field:#262523;
@@ -42,13 +42,13 @@ html[data-theme="light"] {    /* Light — the family's light palette */
   --accent:#185fa5; --accent-fg:#ffffff;
   --ok:#3b6d11; --err:#a32d2d; --amber:#d98a00;
   --primary-bg:#1a1a18; --primary-fg:#ffffff;
-  --appbar-bg:#0f1519; --appbar-fg:#eaf2f7; --appbar-muted:#8fa0ad;
+  --appbar-bg:#171712; --appbar-fg:#f0eee6; --appbar-muted:#a6a495;
   --shadow:0 10px 30px rgba(0,0,0,.18);
   --pill-green-bg:#e8f3e0; --pill-green-fg:#3b6d11;
   --pill-amber-bg:#faeeda; --pill-amber-fg:#854f0b;
   --pill-gray-bg:#f1efe8;  --pill-gray-fg:#5f5e5a;
   --pill-red-bg:#f7d4d4;   --pill-red-fg:#791f1f;
-  --pill-blue-bg:#dceef5;  --pill-blue-fg:#12556b;
+  --pill-blue-bg:#e4edf2;  --pill-blue-fg:#274f61;
 }
 
 * { box-sizing:border-box; }

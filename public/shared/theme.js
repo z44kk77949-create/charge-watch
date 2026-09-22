@@ -11,7 +11,7 @@
 
 (function () {
   const THEMES = [
-    { key: "charge", label: "Charge" },
+    { key: "leopard", label: "Leopard" },
     { key: "auto",   label: "Automatic" },
     { key: "light",  label: "Light" },
     { key: "dark",   label: "Dark" },
@@ -21,7 +21,7 @@
 
   function resolve(name) {
     if (name === "auto") return matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
-    return VALID.has(name) ? name : "charge";
+    return VALID.has(name) ? name : "leopard";
   }
 
   function apply(name) {
@@ -33,7 +33,13 @@
   }
 
   function get() {
-    try { const v = localStorage.getItem(STORE); return VALID.has(v) ? v : "charge"; } catch (e) { return "charge"; }
+    try {
+      const v = localStorage.getItem(STORE);
+      // "charge" was this app's own brand name before it adopted the family's
+      // Leopard palette; anyone who picked it keeps the brand theme.
+      if (v === "charge") return "leopard";
+      return VALID.has(v) ? v : "leopard";
+    } catch (e) { return "leopard"; }
   }
 
   function set(name) {

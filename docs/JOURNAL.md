@@ -188,3 +188,34 @@ Also, at the owner's request: **the "What it looks like" field is gone from
 intake.** The tag number and the charging point are what a handler needs at the
 counter; a description is a keystroke in a queue. The field remains on the Edit
 dialog for the rare disputed charger, and the column is untouched.
+
+### 2026-09-22 — brand, and a QR that stops competing for attention
+
+**The brand theme is now Leopard — black and gold — not the slate-and-cyan I
+invented.** That was flagged at build time as needing the owner's eye, and the
+answer was to match the family. The option is renamed from "Charge" to
+"Leopard" so the four theme names are identical across every app he runs, per
+the design standard; anyone who had picked "charge" is mapped to "leopard"
+rather than reset. App icons regenerated to match: gold plate with a black bolt
+for customers, the inverse in black and gold for the tent console, and the same
+with a gold ring for admin — three marks distinguishable on one home screen.
+
+**The slip's QR had a second problem beyond the rendering.** Pointing a phone
+at it, the camera kept offering the printed code and the address *underneath*
+the square instead of scanning it — iOS Live Text reads nearby text and
+competes with QR detection. Fixes:
+
+- Tapping the QR now fills the screen with it — white, alone, as large as fits,
+  tap anywhere to dismiss. This is the right gesture at a counter anyway: hold
+  the screen up and let them scan. It also takes a screen wake-lock, because a
+  display dimming mid-scan is a quietly common reason a code "doesn't work".
+- The readable code and the address are pushed well clear of the square, and
+  the address is shown without its `https://` so it reads as instructions
+  rather than as a link to be detected.
+
+**Intake is one field now.** The owner's words: "just the label on the charger
+works". Tag number, big, focused on open, and a thumb-sized Book it in. The
+charging point and the customer's name are folded behind a single line and stay
+open for the rest of the shift once a tent decides it wants them — a tent that
+records charging points records them for every charger, so making that choice
+once is right.

@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en" data-theme="charge">
+<html lang="en" data-theme="leopard">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content">
@@ -11,10 +11,10 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black">
-<meta name="theme-color" content="#0a0f13">
+<meta name="theme-color" content="#0e0e0a">
 <!-- Theme before first paint. This must stay inline and ahead of the stylesheet:
      applying it from theme.js instead arrives a frame late and flashes white. -->
-<script>(function(){try{var t=localStorage.getItem('cw_theme')||'charge';if(t==='auto')t=matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light';if(['light','dark','charge'].indexOf(t)<0)t='charge';document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
+<script>(function(){try{var t=localStorage.getItem('cw_theme')||'leopard';if(t==='charge')t='leopard';if(t==='auto')t=matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light';if(['light','dark','leopard'].indexOf(t)<0)t='leopard';document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
 <link rel="stylesheet" href="/shared/app.css">
 </head>
 <body>
@@ -322,7 +322,8 @@ function renderCollect() {
     + `<div class="sub">${ready ? "Show this at the counter" : "You can still collect it early — show this at the counter"}</div></div>`;
 
   if (t.collect_qr) {
-    html += `<div class="qr-plate" id="qr-plate">${cwQr.svg(t.collect_qr, { label: "Collection code for " + t.ref })}</div>`
+    html += `<div class="qr-plate" id="qr-plate" style="cursor:pointer;" onclick="cwQr.full(${esc(JSON.stringify(t.collect_qr))}, 'Collection code')" title="Tap to fill the screen">${cwQr.svg(t.collect_qr, { label: "Collection code for " + t.ref })}</div>`
+      + '<p class="tiny muted" style="text-align:center;margin:8px 0 0;">Tap the square to fill the screen</p>'
       + '<div style="text-align:center;margin-top:14px;">'
       + `<div class="tiny muted" style="text-transform:uppercase;letter-spacing:.08em;">Ticket ${esc(t.ref)}</div>`
       + `<div style="font:800 34px/1.2 ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:.14em;margin-top:4px;" id="collect-digits">${esc(t.collect_code || "")}</div>`

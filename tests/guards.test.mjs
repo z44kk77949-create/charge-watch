@@ -163,7 +163,7 @@ await test("no surface hardcodes a colour outside the design tokens", () => {
   //   • the camera viewport and the QR plate, which must stay black and white
   //     in every theme or a scanner loses contrast
   //   • rgba() overlays for scrims
-  const allowed = new Set(["#0a0f13", "#000", "#fff", "#ffffff", "#000000"]);
+  const allowed = new Set(["#0e0e0a", "#000", "#fff", "#ffffff", "#000000"]);
   for (const p of surfaces) {
     for (const hex of read(p).match(/#[0-9a-fA-F]{3,8}\b/g) || []) {
       // &#8942; — the kebab glyph — is an HTML entity, not a colour.

@@ -11,13 +11,14 @@ libraries and no network, so nothing here may import one.
 
     python3 tools/make-icons.py          # writes public/icons/*
 
-Three identities, one shape language — a bolt in a rounded square:
-    icon-*   customer app   cyan plate, dark bolt
-    tent-*   tent console   dark plate, cyan bolt (it lives on a handler's
-                            phone beside the customer app, so it must not be
-                            mistaken for it at a glance on a home screen)
-    admin-*  admin console  amber plate, dark bolt (amber is the admin accent
-                            throughout the app)
+Three identities, one shape language — a bolt in a rounded square, in the
+family's black and gold:
+    icon-*   customer app   gold plate, black bolt (the brightest, since it is
+                            the one most people end up with on a home screen)
+    tent-*   tent console   black plate, gold bolt — the inverse, so a handler
+                            with both installed can tell them apart at a glance
+    admin-*  admin console  black plate, gold bolt inside a gold ring; the ring
+                            is the only mark that says "setup"
 """
 
 import struct
@@ -26,11 +27,12 @@ from pathlib import Path
 
 OUT = Path(__file__).resolve().parent.parent / "public" / "icons"
 
-CYAN = (0x35, 0xC9, 0xE8)
-DEEP = (0x06, 0x22, 0x2B)
-SLATE = (0x0E, 0x12, 0x16)
-AMBER = (0xE8, 0xB4, 0x5C)
-DARK_AMBER = (0x24, 0x1A, 0x06)
+# The family's Leopard palette — black and gold — taken from the shared brand
+# rather than invented here. These are the same values as `:root` in
+# public/shared/app.css; if the brand ever moves, move both.
+GOLD = (0xF0, 0xB5, 0x2E)
+INK = (0x17, 0x13, 0x0A)      # the near-black the gold sits on
+BLACK = (0x0D, 0x0D, 0x0B)    # the app background
 
 # A lightning bolt in a 0..1 box. Deliberately angular and upright: a dignified
 # mark, not a cartoon spark.
@@ -73,7 +75,7 @@ def in_rounded_rect(x, y, size, radius, inset=0.0):
     return True
 
 
-def render(size, plate, bolt, maskable=False):
+def render(size, plate, bolt, maskable=False, ring=False):
     """Return RGBA bytes for one icon."""
     # A maskable icon is full-bleed (the launcher crops it) with the mark pulled
     # into the middle 80% safe zone; a normal icon is a rounded plate.
@@ -82,6 +84,12 @@ def render(size, plate, bolt, maskable=False):
     offset = (1 - scale) / 2
 
     poly = [((px * scale + offset) * size, (py * scale + offset) * size) for px, py in BOLT]
+
+    # The admin ring: an inset outline in the bolt's colour, drawn as the gap
+    # between two rounded rectangles.
+    ring_outer, ring_inner = size * 0.085, size * 0.115
+    ring_radius_o = max(0.0, radius - ring_outer)
+    ring_radius_i = max(0.0, radius - ring_inner)
 
     rows = []
     for py in range(size):
@@ -95,7 +103,12 @@ def render(size, plate, bolt, maskable=False):
                     y = py + (sy + 0.5) / SS
                     if maskable or in_rounded_rect(x, y, size, radius):
                         plate_hits += 1
-                        if point_in_polygon(x, y, poly):
+                        marked = point_in_polygon(x, y, poly)
+                        if ring and not marked:
+                            on_ring = (in_rounded_rect(x, y, size, ring_radius_o, ring_outer)
+                                       and not in_rounded_rect(x, y, size, ring_radius_i, ring_inner))
+                            marked = on_ring
+                        if marked:
                             bolt_hits += 1
             total = SS * SS
             if plate_hits == 0:
@@ -131,31 +144,36 @@ def write_png(path, rows, size):
     print(f"  {path.name}  {size}x{size}  {len(png):,} bytes")
 
 
-def svg(plate, bolt, name):
+def svg(plate, bolt, name, ring=False):
     pts = " ".join(f"{x * 80 + 10:.1f},{y * 80 + 10:.1f}" for x, y in BOLT)
+    ring_el = (
+        f'<rect x="8.5" y="8.5" width="83" height="83" rx="16" fill="none" '
+        f'stroke="rgb{bolt}" stroke-width="3"/>' if ring else ""
+    )
     return (
         '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" role="img" '
         f'aria-label="{name}">'
         f'<rect width="100" height="100" rx="22" fill="rgb{plate}"/>'
+        f'{ring_el}'
         f'<polygon points="{pts}" fill="rgb{bolt}"/></svg>'
     )
 
 
 VARIANTS = {
-    "icon":  (CYAN, DEEP, "Charge Watch"),
-    "tent":  (SLATE, CYAN, "Charge Watch Tent"),
-    "admin": (AMBER, DARK_AMBER, "Charge Watch Admin"),
+    "icon":  (GOLD, INK, "Charge Watch", False),
+    "tent":  (BLACK, GOLD, "Charge Watch Tent", False),
+    "admin": (BLACK, GOLD, "Charge Watch Admin", True),
 }
 
 if __name__ == "__main__":
     OUT.mkdir(parents=True, exist_ok=True)
-    for prefix, (plate, bolt, label) in VARIANTS.items():
+    for prefix, (plate, bolt, label, ring) in VARIANTS.items():
         print(f"{label}:")
         for size in (192, 512):
-            write_png(OUT / f"{prefix}-{size}.png", render(size, plate, bolt), size)
-        write_png(OUT / f"{prefix}-maskable-512.png", render(512, plate, bolt, maskable=True), 512)
-        (OUT / f"{prefix}.svg").write_text(svg(plate, bolt, label))
+            write_png(OUT / f"{prefix}-{size}.png", render(size, plate, bolt, ring=ring), size)
+        write_png(OUT / f"{prefix}-maskable-512.png", render(512, plate, bolt, maskable=True, ring=ring), 512)
+        (OUT / f"{prefix}.svg").write_text(svg(plate, bolt, label, ring))
         print(f"  {prefix}.svg")
     # iOS uses this one for the Home Screen; it has no transparency and no mask,
     # so it renders the customer plate at the size Apple asks for.
-    write_png(OUT / "apple-touch-icon.png", render(180, CYAN, DEEP), 180)
+    write_png(OUT / "apple-touch-icon.png", render(180, GOLD, INK), 180)

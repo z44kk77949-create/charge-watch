@@ -407,7 +407,55 @@
     };
   }
 
-  const api = { matrix: qrMatrix, svg: qrSvg, scanSupported, scanStart };
+  // --- Full-screen presentation --------------------------------------------
+  // A QR on a busy screen competes with everything around it: phone cameras
+  // read nearby text (iOS Live Text especially) and offer that instead of
+  // scanning the code. This puts the code alone on a white screen at the
+  // largest size that fits, which is both easier to detect and the natural
+  // gesture at a counter — hold the screen up, they scan, tap to dismiss.
+  function qrFull(text, label) {
+    const svg = qrSvg(text, { label: label || "QR code" });
+    if (!svg) return;
+    const wrap = document.createElement("div");
+    wrap.setAttribute("role", "dialog");
+    wrap.setAttribute("aria-modal", "true");
+    wrap.setAttribute("aria-label", label || "QR code");
+    wrap.tabIndex = -1;
+    // White, and black-on-white inside, in every theme: a scanner needs the
+    // contrast, and a dark-themed code on an OLED screen is a harder read.
+    wrap.style.cssText = "position:fixed;inset:0;z-index:2147483002;background:#fff;display:flex;"
+      + "align-items:center;justify-content:center;flex-direction:column;gap:18px;padding:20px;cursor:pointer;";
+    const box = document.createElement("div");
+    box.style.cssText = "width:min(86vw,72vh);max-width:560px;";
+    box.innerHTML = svg;
+    const hint = document.createElement("div");
+    hint.textContent = "Tap anywhere to close";
+    hint.style.cssText = "font:500 13px/1 -apple-system,'Segoe UI',Roboto,sans-serif;color:#666;";
+    wrap.appendChild(box); wrap.appendChild(hint);
+
+    // Keep the screen awake while it's being scanned — a display that dims
+    // mid-scan is a surprisingly common reason a code "won't work".
+    let lock = null;
+    try {
+      if (navigator.wakeLock && navigator.wakeLock.request) {
+        navigator.wakeLock.request("screen").then((l) => { lock = l; }).catch(() => {});
+      }
+    } catch (e) {}
+
+    const close = () => {
+      document.removeEventListener("keydown", onKey, true);
+      try { if (lock) lock.release(); } catch (e) {}
+      if (wrap.parentNode) wrap.parentNode.removeChild(wrap);
+    };
+    const onKey = (e) => { if (e.key === "Escape") { e.preventDefault(); close(); } };
+    wrap.addEventListener("click", close);
+    document.addEventListener("keydown", onKey, true);
+    document.body.appendChild(wrap);
+    try { wrap.focus(); } catch (e) {}
+    return close;
+  }
+
+  const api = { matrix: qrMatrix, svg: qrSvg, full: qrFull, scanSupported, scanStart };
   if (typeof window !== "undefined") { window.cwQr = api; }
   if (typeof module !== "undefined" && module.exports) { module.exports = api; }
 })();

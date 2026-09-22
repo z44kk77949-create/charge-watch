@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en" data-theme="charge">
+<html lang="en" data-theme="leopard">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content">
@@ -10,8 +10,8 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black">
-<meta name="theme-color" content="#0a0f13">
-<script>(function(){try{var t=localStorage.getItem('cw_tent_theme')||'charge';if(t==='auto')t=matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light';if(['light','dark','charge'].indexOf(t)<0)t='charge';document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
+<meta name="theme-color" content="#0e0e0a">
+<script>(function(){try{var t=localStorage.getItem('cw_tent_theme')||'leopard';if(t==='charge')t='leopard';if(t==='auto')t=matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light';if(['light','dark','leopard'].indexOf(t)<0)t='leopard';document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
 <link rel="stylesheet" href="/shared/app.css">
 <style>
   /* Intake is used one-handed, at speed, standing up — the fields are taller
@@ -69,6 +69,10 @@
 // and the server checks that again on every write.
 
 cwTheme.init("cw_tent_theme");
+
+// A string safe to sit inside an onclick="" attribute: JSON-quoted, then
+// HTML-escaped so the quotes can't end the attribute early.
+function jsAttr(v) { return esc(JSON.stringify(String(v))); }
 
 const V = document.getElementById("view");
 let ME = null, BOARD = null, FILTER = "open", SEARCH = "", LAST_SLIP = null, MATCHES = [];
@@ -168,19 +172,37 @@ function renderIntake() {
     return;
   }
 
+  // ONE field by default: the tag number. That is the whole transaction at a
+  // busy counter — everything else is a keystroke someone is waiting through.
+  // The charging point and the customer's name are still here, folded away,
+  // because a tent that wants them shouldn't have to ask for a code change.
   V.innerHTML = '<div class="card intake"><h2>Take a charger in</h2>'
     + (tents.length > 1
         ? '<label for="tent">Tent</label><select id="tent">' + tents.map(t => `<option value="${esc(t.id)}">${esc(t.name)}</option>`).join("") + "</select>"
         : `<input type="hidden" id="tent" value="${esc(tents[0].id)}">`)
-    + '<label for="label">Tag number on the charger *</label>'
-    + '<input id="label" maxlength="40" autocapitalize="characters" spellcheck="false" placeholder="e.g. 47" aria-label="Tag number">'
+    + '<label for="label">Tag number on the charger</label>'
+    + '<input id="label" class="codefield" maxlength="40" autocapitalize="characters" spellcheck="false" placeholder="47" aria-label="Tag number">'
     + '<div class="hint">Write this on the charger before you take it.</div>'
-    + '<label for="slot">Charging point</label><input id="slot" maxlength="20" autocapitalize="characters" spellcheck="false" placeholder="e.g. B3">'
-    + '<label for="owner">Their name</label><input id="owner" maxlength="60" placeholder="Optional — helps if they lose the slip">'
     + '<div class="msg err hide" id="err" role="alert"></div>'
-    + '<button class="primary wide" style="margin-top:16px;padding:14px;" onclick="doIntake()">Book it in</button>'
+    + '<button class="primary wide" style="margin-top:16px;padding:16px;font-size:16px;" onclick="doIntake()">Book it in</button>'
+    + '<div id="more" class="hide" style="margin-top:6px;">'
+    + '<label for="slot">Charging point</label><input id="slot" maxlength="20" autocapitalize="characters" spellcheck="false" placeholder="e.g. B3">'
+    + '<label for="owner">Their name</label><input id="owner" maxlength="60" placeholder="Helps if they lose the slip">'
+    + "</div>"
+    + '<button class="ghost small wide" id="more-btn" style="margin-top:10px;color:var(--muted);" onclick="toggleMore()">+ Charging point or name</button>'
     + "</div>";
+  if (INTAKE_MORE) { document.getElementById("more").classList.remove("hide"); document.getElementById("more-btn").textContent = "− Hide extra fields"; }
   setTimeout(() => { try { document.getElementById("label").focus(); } catch (e) {} }, 60);
+}
+
+// Once opened, the extra fields stay open for the rest of the shift — a tent
+// that records charging points records them for every charger, and re-opening
+// this on each intake would be its own small tax.
+let INTAKE_MORE = false;
+function toggleMore() {
+  INTAKE_MORE = !INTAKE_MORE;
+  document.getElementById("more").classList.toggle("hide", !INTAKE_MORE);
+  document.getElementById("more-btn").textContent = INTAKE_MORE ? "− Hide extra fields" : "+ Charging point or name";
 }
 
 async function doIntake() {
@@ -202,10 +224,15 @@ function renderSlip() {
     + '<div class="tiny muted noprint" style="text-transform:uppercase;letter-spacing:.08em;">Give this to them</div>'
     + `<h2 style="margin:6px 0 2px;">${esc(s.ticket.tent_name)} · ${esc(s.ticket.ref)}</h2>`
     + `<p class="small muted" style="margin:0;">Tag ${esc(s.ticket.label)}${s.ticket.slot ? " · point " + esc(s.ticket.slot) : ""}</p>`
-    + `<div class="qr-plate" style="margin-top:14px;">${cwQr.svg(s.claim_url, { label: "Collection code" })}</div>`
+    + `<div class="qr-plate" style="margin-top:14px;cursor:pointer;" onclick="cwQr.full(${jsAttr(s.claim_url)}, 'Collection code')" title="Tap to fill the screen">${cwQr.svg(s.claim_url, { label: "Collection code" })}</div>`
+    + '<p class="tiny muted noprint" style="margin:6px 0 0;">Tap the square to fill the screen — easier to scan</p>'
+    // A wide gap below the QR on purpose: a phone camera picks up printed text
+    // near a code and offers THAT instead of scanning, so the readable code and
+    // the address are kept well clear of the square.
+    + '<div style="height:26px;"></div>'
     + `<div class="code">${esc(s.claim_code)}</div>`
-    + '<p class="small muted" style="margin:2px 0 0;">Scan the square, or type the code at the address below.</p>'
-    + `<p class="tiny muted" style="margin:6px 0 0;word-break:break-all;">${esc(s.claim_url.split("#")[0])}</p>`
+    + '<p class="small muted" style="margin:2px 0 0;">Can\'t scan? Type this code at</p>'
+    + `<p class="small" style="margin:2px 0 0;font-weight:600;">${esc(s.claim_url.split("#")[0].replace(/^https?:\/\//, ""))}</p>`
     + '<div class="btnrow noprint" style="margin-top:18px;justify-content:center;">'
     + '<button onclick="window.print()">Print</button>'
     + '<button class="primary" onclick="nextIntake()">Take another</button>'
