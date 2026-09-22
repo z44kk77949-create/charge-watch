@@ -332,11 +332,29 @@
     opts = opts || {};
     const qr = qrMatrix(text);
     if (!qr) return "";
-    const quiet = opts.quiet == null ? 2 : opts.quiet;   // quiet zone, in modules
+    // FOUR modules of quiet zone, which is what the specification requires. Two
+    // looked fine on screen and failed to scan on a phone: the quiet zone is
+    // how a camera finds the code's edges at all, and the white plate's padding
+    // around it is not a substitute because the scanner sees the whole frame.
+    const quiet = opts.quiet == null ? 4 : opts.quiet;
     const span = qr.size + quiet * 2;
+
+    // Emit one rectangle per HORIZONTAL RUN of dark modules rather than one per
+    // module. Drawn separately, adjacent squares can land on sub-pixel bounds
+    // and leave hairline seams once `crispEdges` snaps them — white lines
+    // through the dark blocks, which is exactly what stops a detector locking
+    // on. Merging the runs removes almost every internal seam and shrinks the
+    // markup at the same time.
     let d = "";
-    for (let r = 0; r < qr.size; r++) for (let c = 0; c < qr.size; c++) {
-      if (qr.modules[r][c]) d += `M${c + quiet} ${r + quiet}h1v1h-1z`;
+    for (let r = 0; r < qr.size; r++) {
+      let c = 0;
+      while (c < qr.size) {
+        if (!qr.modules[r][c]) { c++; continue; }
+        let len = 1;
+        while (c + len < qr.size && qr.modules[r][c + len]) len++;
+        d += `M${c + quiet} ${r + quiet}h${len}v1h-${len}z`;
+        c += len;
+      }
     }
     const label = opts.label ? String(opts.label).replace(/[<>&"]/g, "") : "QR code";
     return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${span} ${span}" width="100%" height="100%" role="img" aria-label="${label}" shape-rendering="crispEdges">`

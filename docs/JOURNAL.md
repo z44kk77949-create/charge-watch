@@ -155,3 +155,36 @@ Lesson worth keeping: **a serverless platform limit can look exactly like a
 network fault**, and the app's own error copy decides which one the operator
 goes hunting for. Getting that wrong cost a diagnostic round trip with the
 owner standing at the dashboard.
+
+### 2026-09-22 — the slip's QR wouldn't scan
+
+Owner account created; first intake produced a slip whose QR a phone camera
+would not pick up. The encoder was not at fault — `tests/qr.test.mjs` decodes
+every matrix back to its input — because the bug was in the *rendering*, which
+those tests didn't reach.
+
+Two causes, both now fixed:
+
+- **The quiet zone was 2 modules. The specification requires 4.** The quiet
+  zone is how a camera finds the code's boundary at all, and the white plate's
+  own padding is no substitute because the scanner sees the whole frame, not
+  the CSS. This alone can make a perfectly valid code invisible to a detector.
+- **Each module was drawn as its own 1×1 rectangle.** With `crispEdges` and a
+  fractional module size, adjacent squares snap to device pixels independently
+  and can leave hairline white seams through the dark blocks. The renderer now
+  emits one rectangle per horizontal RUN of dark modules, which removes almost
+  every internal seam and shrinks the markup.
+
+Also enlarged the plate (280 → 330 px on screen, 230 → 270 in print) for more
+pixels per module.
+
+The lesson to keep: **a passing encoder test says nothing about whether the
+thing on the glass can be read.** The suite verified bits and geometry all the
+way down to Reed-Solomon syndromes, and still missed a two-line rendering
+choice that made the whole feature useless in the field. The new tests check
+the drawn output — quiet zone and run coverage — not just the matrix.
+
+Also, at the owner's request: **the "What it looks like" field is gone from
+intake.** The tag number and the charging point are what a handler needs at the
+counter; a description is a keystroke in a queue. The field remains on the Edit
+dialog for the rare disputed charger, and the column is untouched.

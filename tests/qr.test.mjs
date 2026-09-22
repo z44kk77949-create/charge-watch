@@ -344,15 +344,45 @@ test("multi-byte characters are counted in bytes, not characters", () => {
 // --- SVG output --------------------------------------------------------------
 console.log("=== QR: SVG ===");
 
-test("svg is well-formed, sized to the quiet zone, and escapes its label", () => {
+test("svg is well-formed, escapes its label, and carries the required quiet zone", () => {
   const qr = cwQr.matrix(SAMPLES[0]);
   const svg = cwQr.svg(SAMPLES[0], { label: 'Collection <code> "A"' });
   assert.match(svg, /^<svg xmlns="http:\/\/www\.w3\.org\/2000\/svg"/);
   assert.ok(svg.endsWith("</svg>"), "svg must be closed");
-  assert.match(svg, new RegExp(`viewBox="0 0 ${qr.size + 4} ${qr.size + 4}"`), "default quiet zone is 2 modules each side");
+  // FOUR modules each side. The specification requires it, and two did not
+  // scan on a phone even though it looked fine on screen — the quiet zone is
+  // how a camera finds the code's boundary in the first place.
+  assert.match(svg, new RegExp(`viewBox="0 0 ${qr.size + 8} ${qr.size + 8}"`),
+    "the default quiet zone must be 4 modules on every side");
   assert.ok(!/aria-label="[^"]*[<>&]/.test(svg), "label must not carry raw markup characters");
-  const darkModules = qr.modules.flat().filter(Boolean).length;
-  assert.equal((svg.match(/M\d+ \d+h1v1h-1z/g) || []).length, darkModules, "one path segment per dark module");
+});
+
+test("the path draws exactly the dark modules, merged into horizontal runs", () => {
+  // Runs rather than individual squares: separately-drawn adjacent modules can
+  // leave hairline seams once crispEdges snaps them to device pixels, and white
+  // lines through the dark blocks stop a detector locking on. This re-derives
+  // the expected runs independently and checks both the count and the total
+  // area, so a merge that dropped or doubled a module would fail.
+  for (const sample of SAMPLES) {
+    const qr = cwQr.matrix(sample);
+    const svg = cwQr.svg(sample);
+    let expectedRuns = 0, expectedDark = 0;
+    for (let r = 0; r < qr.size; r++) {
+      let c = 0;
+      while (c < qr.size) {
+        if (!qr.modules[r][c]) { c++; continue; }
+        let len = 1;
+        while (c + len < qr.size && qr.modules[r][c + len]) len++;
+        expectedRuns++; expectedDark += len; c += len;
+      }
+    }
+    const drawn = [...svg.matchAll(/M\d+ \d+h(\d+)v1h-\d+z/g)].map(m => Number(m[1]));
+    assert.equal(drawn.length, expectedRuns, `${sample.slice(0, 20)}: wrong number of runs`);
+    assert.equal(drawn.reduce((a, b) => a + b, 0), expectedDark, `${sample.slice(0, 20)}: runs don't cover the dark modules`);
+    assert.equal(expectedDark, qr.modules.flat().filter(Boolean).length);
+    // Every run must close back over its own width, or the fill is malformed.
+    for (const m of svg.matchAll(/h(\d+)v1h-(\d+)z/g)) assert.equal(m[1], m[2], "a run must close over its own width");
+  }
 });
 
 test("foreground and background colours are honoured", () => {

@@ -177,7 +177,6 @@ function renderIntake() {
     + '<div class="hint">Write this on the charger before you take it.</div>'
     + '<label for="slot">Charging point</label><input id="slot" maxlength="20" autocapitalize="characters" spellcheck="false" placeholder="e.g. B3">'
     + '<label for="owner">Their name</label><input id="owner" maxlength="60" placeholder="Optional — helps if they lose the slip">'
-    + '<label for="desc">What it looks like</label><input id="desc" maxlength="120" placeholder="e.g. black Anker, blue cable">'
     + '<div class="msg err hide" id="err" role="alert"></div>'
     + '<button class="primary wide" style="margin-top:16px;padding:14px;" onclick="doIntake()">Book it in</button>'
     + "</div>";
@@ -190,7 +189,7 @@ async function doIntake() {
   if (!val("label").trim()) { err.textContent = "Enter the tag number you wrote on the charger."; err.classList.remove("hide"); return; }
   const r = await post("/api/intake", {
     tent_id: val("tent"), label: val("label"), slot: val("slot"),
-    owner_name: val("owner"), device_desc: val("desc"),
+    owner_name: val("owner"),
   });
   if (!r.ok) { err.textContent = r.error || "Couldn't book that in."; err.classList.remove("hide"); return; }
   LAST_SLIP = r;

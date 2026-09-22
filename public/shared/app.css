@@ -182,7 +182,7 @@ textarea { min-height:78px; resize:vertical; }
 
 /* QR presentation. White plate in every theme — a scanner needs the contrast,
    and a dark-themed QR on an OLED phone at night is a genuinely harder read. */
-.qr-plate { background:#fff; border-radius:14px; padding:12px; margin:0 auto; max-width:280px; }
+.qr-plate { background:#fff; border-radius:14px; padding:14px; margin:0 auto; max-width:330px; }
 .qr-plate svg { display:block; width:100%; height:auto; }
 
 /* Pull-to-refresh indicator (shared/app-refresh.js drives it). */
@@ -200,7 +200,7 @@ textarea { min-height:78px; resize:vertical; }
   header, nav, .noprint, #cw-toasts { display:none !important; }
   body, main, main .inner { background:#fff !important; color:#000 !important; display:block !important; overflow:visible !important; }
   .card { border:1px solid #999 !important; box-shadow:none !important; page-break-inside:avoid; }
-  .qr-plate { max-width:230px; }
+  .qr-plate { max-width:270px; }
 }
 
 @media (prefers-reduced-motion: reduce) { * { animation:none !important; transition:none !important; } }
