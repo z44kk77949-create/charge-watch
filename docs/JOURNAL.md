@@ -11,21 +11,31 @@ Outstanding work lives only in "Held for later" below.
 
 ## Where we stopped
 
-The app is **complete and tested, and has never been deployed.** Everything
-below the line is built and passing; nothing has run against a real tent.
+**Live on Cloudflare Pages**, deployed from `z44kk77949-create/charge-watch`.
+Not yet used at a real tent.
+
+Done: repo created and pushed; Pages project `charge-watch` connected to `main`
+(no build command, output `public`); D1 `charge-watch` bound as `DB`;
+`ADMIN_INIT_KEY` and `PAIR_SECRET` set in the dashboard; migrations 001 and 002
+already applied to the database.
 
 **Next, in order:**
 
-1. **Scott creates the GitHub repository** `charge-watch` (private), and the
-   local build here gets pushed to it. It was built outside a repo because the
-   session's GitHub token could not create one.
-2. **Connect it to Cloudflare Pages** and bind the D1 database — the exact
-   settings are in `docs/DEPLOY.md` §1–2.
-3. **Set `ADMIN_INIT_KEY` and `PAIR_SECRET`**, deploy, open `/admin/` and create
-   the owner account.
-4. **Walk one charger end to end on real phones** before the event: take it in,
-   scan the slip with a phone camera, mark it ready, collect it with the app's
-   QR. That is the only way to find what a desk can't.
+1. **Confirm `/api/health`** reports `database.bound`, `database.reachable` and
+   `pair_signing` all true. That is the whole configuration, checked in one
+   request, and it never reveals a value.
+2. **Create the owner account** at `/admin/` using the setup key. The form
+   closes permanently once one staff row exists.
+3. **Set up a tent and one handler** (Admin → Tents, Admin → Staff).
+4. **Walk one charger end to end on real phones**: take it in at `/tent/`, scan
+   the slip with a phone camera, mark it ready, collect it with the code in the
+   app. A desk cannot find what that will find.
+5. **Rotate `ADMIN_INIT_KEY`** once the owner account exists — it was generated
+   in a chat session, and after setup it is only needed for the one-time
+   Telegram webhook registration.
+
+Deliberately not done yet: Telegram, web push, and the reminder cron. All three
+are dormant until their variables are set, and none of them block a first run.
 
 ### Held for later
 

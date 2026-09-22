@@ -1,0 +1,8 @@
+Bump this file to trigger a fresh production deployment.
+
+Cloudflare only applies environment variables and bindings to a NEW
+deployment — saving them in the dashboard does nothing to the running app.
+So after changing a variable or a binding, either hit "Retry deployment" in
+the dashboard or bump this file and push.
+
+2026-09-22  first deploy carrying the D1 binding (DB) and the signing secrets
