@@ -103,7 +103,7 @@ function renderSetup() {
     + '<label for="u">Username</label><input id="u" autocapitalize="none" spellcheck="false" maxlength="40">'
     + '<div class="hint">Letters, numbers, dot, dash or underscore.</div>'
     + '<label for="p">Choose a PIN</label><input id="p" type="password" inputmode="numeric" maxlength="10">'
-    + '<div class="hint">4 to 10 digits. You\'ll type this at the start of every shift.</div>'
+    + '<div class="hint">6 to 10 digits. You\'ll type this at the start of every shift.</div>'
     + '<div class="msg err hide" id="err" role="alert"></div>'
     + '<button class="primary wide" style="margin-top:14px;" onclick="doSetup()">Create owner account</button></div>';
 }
@@ -111,10 +111,7 @@ function renderSetup() {
 async function doSetup() {
   const v = (id) => (document.getElementById(id) || {}).value || "";
   const err = document.getElementById("err");
-  const r = await fetch("/api/auth", {
-    method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ action: "bootstrap", key: v("k"), name: v("n"), username: v("u"), pin: v("p") }),
-  }).then(x => x.json()).catch(() => ({ ok: false, error: "Network error — check your connection." }));
+  const r = await postRaw("/api/auth", { action: "bootstrap", key: v("k"), name: v("n"), username: v("u"), pin: v("p") });
   if (!r.ok) { err.textContent = r.error || "Couldn't create that account."; err.classList.remove("hide"); return; }
   try { localStorage.setItem("cw_code", r.token); } catch (e) {}
   cwToast("Owner account created.", { type: "ok" });
@@ -135,10 +132,7 @@ function renderSignIn() {
 async function doSignIn() {
   const v = (id) => (document.getElementById(id) || {}).value || "";
   const err = document.getElementById("err");
-  const r = await fetch("/api/auth", {
-    method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ action: "staff", username: v("u"), pin: v("p") }),
-  }).then(x => x.json()).catch(() => ({ ok: false, error: "Network error — check your connection." }));
+  const r = await postRaw("/api/auth", { action: "staff", username: v("u"), pin: v("p") });
   if (!r.ok) { err.textContent = r.error || "That didn't work."; err.classList.remove("hide"); return; }
   try { localStorage.setItem("cw_code", r.token); } catch (e) {}
   await boot();
@@ -268,7 +262,7 @@ async function newStaff() {
   const vals = await formDialog("Add a person",
     '<label for="s-name">Name</label><input id="s-name" maxlength="60">'
     + '<label for="s-user">Username</label><input id="s-user" autocapitalize="none" spellcheck="false" maxlength="40">'
-    + '<label for="s-pin">PIN</label><input id="s-pin" type="text" inputmode="numeric" maxlength="10" placeholder="4 to 10 digits">'
+    + '<label for="s-pin">PIN</label><input id="s-pin" type="text" inputmode="numeric" maxlength="10" placeholder="6 to 10 digits">'
     + '<div class="hint">Tell them this PIN — it can\'t be shown again.</div>'
     + '<label for="s-role">Role</label><select id="s-role"><option value="handler">Handler — one tent</option>'
     + '<option value="admin">Admin — all tents and this console</option>'
@@ -305,7 +299,7 @@ async function resetPin(id) {
   const s = (STAFF.staff || []).find(x => x.id === id);
   const vals = await formDialog("Reset PIN for " + (s ? s.name : "this person"),
     '<p class="small muted" style="margin:0 0 4px;">Their other devices are signed out straight away.</p>'
-    + '<label for="s-pin">New PIN</label><input id="s-pin" type="text" inputmode="numeric" maxlength="10" placeholder="4 to 10 digits">',
+    + '<label for="s-pin">New PIN</label><input id="s-pin" type="text" inputmode="numeric" maxlength="10" placeholder="6 to 10 digits">',
     ["s-pin"], "Set PIN");
   if (!vals) return;
   const r = await post("/api/staff", { action: "set_pin", id, pin: vals["s-pin"] });

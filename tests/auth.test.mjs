@@ -4,7 +4,7 @@
 import assert from "node:assert/strict";
 import { suite, stubEnv, postRequest } from "./_stub.mjs";
 import { onRequestPost as auth } from "../functions/api/auth.js";
-import { hashPin, newSalt, sha256hex, normCode, newClaimCode, MAX_PIN_FAILS } from "../functions/api/_util.js";
+import { hashPin, newSalt, sha256hex, normCode, newClaimCode, MAX_PIN_FAILS, DEFAULT_PIN_ITERS } from "../functions/api/_util.js";
 
 const { test, done } = suite("auth");
 const call = (env, body) => auth({ env, request: postRequest(body) }).then(r => r.json().then(j => ({ status: r.status, ...j })));
@@ -15,7 +15,10 @@ async function staffRules(overrides = {}) {
   const staff = {
     id: "staff-1", name: "Sam", username: "sam", role: "handler", tent_id: "tent-1",
     active: 1, fail_count: 0, locked_until: null,
-    pin_salt: salt, pin_hash: await hashPin("4821", salt),
+    // A row as the app writes them now: the work factor is recorded, and
+    // sign-in must verify against THAT value rather than the current default.
+    pin_salt: salt, pin_iters: DEFAULT_PIN_ITERS,
+    pin_hash: await hashPin("482913", salt, DEFAULT_PIN_ITERS),
     ...overrides,
   };
   return { staff, rules: [{ match: /from staff where lower\(username\)/, rows: overrides.missing ? [] : [staff] }] };
@@ -24,7 +27,7 @@ async function staffRules(overrides = {}) {
 await test("the right username and PIN mints a session", async () => {
   const { rules } = await staffRules();
   const env = stubEnv(rules);
-  const r = await call(env, { action: "staff", username: "sam", pin: "4821" });
+  const r = await call(env, { action: "staff", username: "sam", pin: "482913" });
   assert.equal(r.ok, true);
   assert.equal(r.kind, "staff");
   assert.equal(r.role, "handler");
@@ -34,7 +37,7 @@ await test("the right username and PIN mints a session", async () => {
 
 await test("the username is not case-sensitive", async () => {
   const { rules } = await staffRules();
-  const r = await call(stubEnv(rules), { action: "staff", username: "  SAM  ", pin: "4821" });
+  const r = await call(stubEnv(rules), { action: "staff", username: "  SAM  ", pin: "482913" });
   assert.equal(r.ok, true);
 });
 
@@ -42,8 +45,8 @@ await test("a wrong PIN and an unknown username are indistinguishable", async ()
   // A sign-in screen that tells them apart enumerates the staff list for anyone
   // who asks it.
   const { rules } = await staffRules();
-  const wrongPin = await call(stubEnv(rules), { action: "staff", username: "sam", pin: "0000" });
-  const noSuchUser = await call(stubEnv((await staffRules({ missing: true })).rules), { action: "staff", username: "nobody", pin: "0000" });
+  const wrongPin = await call(stubEnv(rules), { action: "staff", username: "sam", pin: "000000" });
+  const noSuchUser = await call(stubEnv((await staffRules({ missing: true })).rules), { action: "staff", username: "nobody", pin: "000000" });
   assert.equal(wrongPin.status, 401);
   assert.equal(noSuchUser.status, 401);
   assert.equal(wrongPin.error, noSuchUser.error, "the two failures must read identically");
@@ -51,7 +54,7 @@ await test("a wrong PIN and an unknown username are indistinguishable", async ()
 
 await test("an account with no PIN set cannot be signed into", async () => {
   const { rules } = await staffRules({ pin_hash: null, pin_salt: null });
-  const r = await call(stubEnv(rules), { action: "staff", username: "sam", pin: "4821" });
+  const r = await call(stubEnv(rules), { action: "staff", username: "sam", pin: "482913" });
   assert.equal(r.status, 401);
 });
 
@@ -59,14 +62,14 @@ await test("a deactivated account cannot sign in", async () => {
   // The query itself filters on active = 1, so a deactivated account simply
   // isn't there — the same uniform refusal as an unknown username.
   const env = stubEnv([{ match: /from staff where lower\(username\)/, rows: (p, sql) => (/active = 1/.test(sql) ? [] : []) }]);
-  const r = await call(env, { action: "staff", username: "sam", pin: "4821" });
+  const r = await call(env, { action: "staff", username: "sam", pin: "482913" });
   assert.equal(r.status, 401);
 });
 
 await test("wrong PINs are counted and eventually lock the account", async () => {
   const { rules } = await staffRules({ fail_count: MAX_PIN_FAILS - 1 });
   const env = stubEnv(rules);
-  const r = await call(env, { action: "staff", username: "sam", pin: "0000" });
+  const r = await call(env, { action: "staff", username: "sam", pin: "000000" });
   assert.equal(r.status, 429);
   assert.match(r.error, /too many wrong pins/i);
   const w = env.__db.writeMatching(/update staff set fail_count/);
@@ -77,7 +80,7 @@ await test("wrong PINs are counted and eventually lock the account", async () =>
 await test("a locked account is refused even with the correct PIN", async () => {
   const { rules } = await staffRules({ locked_until: new Date(Date.now() + 5 * 60000).toISOString() });
   const env = stubEnv(rules);
-  const r = await call(env, { action: "staff", username: "sam", pin: "4821" });
+  const r = await call(env, { action: "staff", username: "sam", pin: "482913" });
   assert.equal(r.status, 429);
   assert.equal(env.__db.writeMatching(/insert into sessions/), undefined, "no session may be minted while locked");
 });
@@ -85,14 +88,14 @@ await test("a locked account is refused even with the correct PIN", async () => 
 await test("an expired lock lets them back in and clears the count", async () => {
   const { rules } = await staffRules({ locked_until: new Date(Date.now() - 60000).toISOString(), fail_count: 3 });
   const env = stubEnv(rules);
-  const r = await call(env, { action: "staff", username: "sam", pin: "4821" });
+  const r = await call(env, { action: "staff", username: "sam", pin: "482913" });
   assert.equal(r.ok, true);
   assert.ok(env.__db.writeMatching(/update staff set fail_count = 0/), "a good sign-in resets the counter");
 });
 
 await test("a missing username or PIN is rejected before any lookup", async () => {
   const { rules } = await staffRules();
-  for (const body of [{ username: "", pin: "4821" }, { username: "sam", pin: "" }, {}]) {
+  for (const body of [{ username: "", pin: "482913" }, { username: "sam", pin: "" }, {}]) {
     const r = await call(stubEnv(rules), { action: "staff", ...body });
     assert.equal(r.status, 400, `${JSON.stringify(body)} should be a 400`);
   }
@@ -101,18 +104,18 @@ await test("a missing username or PIN is rejected before any lookup", async () =
 // --- Bootstrap ---------------------------------------------------------------
 await test("the first owner can be created when nobody exists and the key matches", async () => {
   const env = stubEnv([{ match: /count\(\*\) as n from staff/, rows: [{ n: 0 }] }]);
-  const r = await call(env, { action: "bootstrap", key: "test-admin-key", name: "Scott", username: "scott", pin: "1379" });
+  const r = await call(env, { action: "bootstrap", key: "test-admin-key", name: "Scott", username: "scott", pin: "137913" });
   assert.equal(r.ok, true);
   assert.equal(r.role, "owner");
   const w = env.__db.writeMatching(/insert into staff/);
   assert.ok(w, "the owner account must be written");
-  assert.equal(w.params[6], "owner");
-  assert.ok(!w.params.includes("1379"), "the PIN itself must never be stored");
+  assert.equal(w.params[7], "owner", "the role column shifted when pin_iters was added");
+  assert.ok(!w.params.includes("137913"), "the PIN itself must never be stored");
 });
 
 await test("bootstrap is refused once any staff account exists", async () => {
   const env = stubEnv([{ match: /count\(\*\) as n from staff/, rows: [{ n: 1 }] }]);
-  const r = await call(env, { action: "bootstrap", key: "test-admin-key", name: "Mallory", username: "mallory", pin: "1111" });
+  const r = await call(env, { action: "bootstrap", key: "test-admin-key", name: "Mallory", username: "mallory", pin: "111111" });
   assert.equal(r.status, 409);
   assert.equal(env.__db.writeMatching(/insert into staff/), undefined);
 });
@@ -121,7 +124,7 @@ await test("bootstrap is refused without the setup key", async () => {
   const rules = [{ match: /count\(\*\) as n from staff/, rows: [{ n: 0 }] }];
   for (const key of ["", "wrong", undefined]) {
     const env = stubEnv(rules);
-    const r = await call(env, { action: "bootstrap", key, name: "Mallory", username: "mallory", pin: "1111" });
+    const r = await call(env, { action: "bootstrap", key, name: "Mallory", username: "mallory", pin: "111111" });
     assert.equal(r.status, 403, `key ${JSON.stringify(key)} should be refused`);
     assert.equal(env.__db.writeMatching(/insert into staff/), undefined);
   }
@@ -131,18 +134,19 @@ await test("bootstrap is refused when no setup key is configured at all", async 
   // Otherwise an empty ADMIN_INIT_KEY would compare equal to an empty submitted
   // key and hand the app to the first visitor.
   const env = stubEnv([{ match: /count\(\*\) as n from staff/, rows: [{ n: 0 }] }], { ADMIN_INIT_KEY: "" });
-  const r = await call(env, { action: "bootstrap", key: "", name: "Mallory", username: "mallory", pin: "1111" });
+  const r = await call(env, { action: "bootstrap", key: "", name: "Mallory", username: "mallory", pin: "111111" });
   assert.equal(r.status, 403);
 });
 
 await test("bootstrap validates the username and PIN", async () => {
   const rules = [{ match: /count\(\*\) as n from staff/, rows: [{ n: 0 }] }];
   const bad = [
-    { username: "ab", pin: "1234" },                 // too short
-    { username: "has space", pin: "1234" },
+    { username: "ab", pin: "123456" },               // username too short
+    { username: "has space", pin: "123456" },
     { username: "sam", pin: "123" },                 // PIN too short
-    { username: "sam", pin: "abcd" },
-    { name: "", username: "sam", pin: "1234" },
+    { username: "sam", pin: "1234" },                // four digits is no longer enough
+    { username: "sam", pin: "abcdef" },
+    { name: "", username: "sam", pin: "123456" },
   ];
   for (const b of bad) {
     const r = await call(stubEnv(rules), { action: "bootstrap", key: "test-admin-key", name: "Scott", ...b });
@@ -251,7 +255,7 @@ await test("an unknown action changes nothing", async () => {
 });
 
 await test("a missing database binding answers 503", async () => {
-  const r = await auth({ env: {}, request: postRequest({ action: "staff", username: "sam", pin: "4821" }) });
+  const r = await auth({ env: {}, request: postRequest({ action: "staff", username: "sam", pin: "482913" }) });
   assert.equal(r.status, 503);
 });
 

@@ -48,6 +48,7 @@ create table if not exists staff (
   username      text not null unique collate nocase,
   pin_hash      text,                 -- PBKDF2-SHA256, hex
   pin_salt      text,                 -- hex
+  pin_iters     integer,              -- the work factor this hash was made with
   pin_set_at    text,
   role          text not null default 'handler',
   tent_id       text references tents(id),

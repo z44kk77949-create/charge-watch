@@ -257,6 +257,22 @@ await test("the esc() guard would actually catch an unescaped field", () => {
   assert.equal(check(good), false, "and must not flag an escaped one");
 });
 
+await test("the frontend never reports a server fault as a network problem", () => {
+  // A non-JSON response means the request reached Cloudflare and something
+  // failed before our code answered — a crash, or the platform killing it for
+  // exceeding its CPU budget. Calling that "check your connection" sent a real
+  // handler hunting for a fault on their own wifi.
+  const core = read(join(ROOT, "public/shared/core.js"));
+  assert.match(core, /__readJson/, "core.js must route responses through the shared reader");
+  assert.match(core, /__servererr/, "and tag a server fault distinctly from a network one");
+  // No surface may roll its own fetch for sign-in; they all go through postRaw.
+  for (const p of surfaces) {
+    const src = stripComments(read(p));
+    assert.ok(!/fetch\("\/api\//.test(src),
+      `${rel(p)} calls fetch() on the API directly — use api/post/postRaw so errors report consistently`);
+  }
+});
+
 // --- Migrations --------------------------------------------------------------
 await test("every migration is idempotent", () => {
   // The deploy story re-applies migrations, so a statement that isn't safe to

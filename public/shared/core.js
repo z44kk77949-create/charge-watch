@@ -34,9 +34,41 @@ function __sessionRejected() {
 // The `__neterr` flag lets callers tell a transient network failure apart from a
 // real "not ok" (e.g. auth) — so a blip doesn't get treated like a sign-out.
 const NET_ERR = () => ({ ok: false, error: "Network error — check your connection.", __neterr: true });
+
+// Read a response that SHOULD be JSON, and be honest when it isn't.
+//
+// A non-JSON body doesn't mean the network failed — it means the request
+// reached Cloudflare and something went wrong before our code could answer: a
+// function that crashed, or one the platform killed for exceeding its CPU
+// budget (error 1102, which is how a too-expensive PIN hash first showed up).
+// Reporting that as "check your connection" sends people hunting for a fault
+// on their own wifi, which is exactly the wrong place to look.
+async function __readJson(r) {
+  if (r.status === 401) __sessionRejected();
+  try { return await r.json(); } catch (e) {}
+  return {
+    ok: false,
+    __servererr: true,
+    status: r.status,
+    error: r.status === 0
+      ? "Network error — check your connection."
+      : `The server didn't answer properly (HTTP ${r.status}). This is a fault at our end, not yours — the details are in the Cloudflare logs.`,
+  };
+}
+
 function __rawGet(p) {
   return fetch(p + (p.includes("?") ? "&" : "?") + "code=" + encodeURIComponent(code()))
-    .then(r => { if (r.status === 401) __sessionRejected(); return r.json(); })
+    .then(__readJson)
+    .catch(() => NET_ERR());
+}
+
+// An UNAUTHENTICATED post — sign-in, claim redemption, first-run setup. Same
+// error discipline as post() below, minus the bearer. Shared so all three
+// surfaces' sign-in screens report a crash the same way instead of each
+// rolling their own fetch.
+function postRaw(p, b) {
+  return fetch(p, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(b || {}) })
+    .then(__readJson)
     .catch(() => NET_ERR());
 }
 
@@ -69,7 +101,7 @@ const post = (p, b) => {
   const key = p + "\n" + body;
   let pr = __inflight.get(key);
   if (!pr) {
-    pr = fetch(p, { method: "POST", headers: { "Content-Type": "application/json" }, body }).then(r => { if (r.status === 401) __sessionRejected(); return r.json(); }).catch(() => NET_ERR()).finally(() => __inflight.delete(key));
+    pr = fetch(p, { method: "POST", headers: { "Content-Type": "application/json" }, body }).then(__readJson).catch(() => NET_ERR()).finally(() => __inflight.delete(key));
     __inflight.set(key, pr);
   }
   __clickPost = pr;
@@ -138,7 +170,7 @@ function fmt(ts) { return ts ? new Date(ts).toLocaleString("en-SG", { day: "nume
 // `window`. The shared modules (notifications.js, tour.js) call `window.api`/
 // `window.post`, so without this their server calls silently threw — breaking
 // changelog-watermark AND tour-progress persistence. Pin them so `window.*` works.
-window.code = code; window.api = api; window.post = post; window.esc = esc; window.fmt = fmt;
+window.code = code; window.api = api; window.post = post; window.postRaw = postRaw; window.esc = esc; window.fmt = fmt;
 window.prefetch = prefetch; window.warmTabs = warmTabs;
 
 // Network-failure state — a themed "Couldn't load — Retry" card to drop into a

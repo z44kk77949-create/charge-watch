@@ -139,10 +139,7 @@ async function doSignIn() {
   const err = document.getElementById("err");
   const show = (m) => { err.textContent = m; err.classList.remove("hide"); };
   if (!u || !p) return show("Enter your username and PIN.");
-  const r = await fetch("/api/auth", {
-    method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ action: "staff", username: u, pin: p }),
-  }).then(x => x.json()).catch(() => ({ ok: false, error: "Network error — check your connection." }));
+  const r = await postRaw("/api/auth", { action: "staff", username: u, pin: p });
   if (!r.ok) return show(r.error || "That didn't work.");
   try { localStorage.setItem("cw_code", r.token); } catch (e) {}
   await load();

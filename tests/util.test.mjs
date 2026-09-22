@@ -7,6 +7,7 @@ import {
   newClaimCode, normCode, prettyCode, codeHint, isSafeId, clean, timingSafeEqual,
   collectCode, verifyCollectCode, qrPayload, parseQrPayload,
   pairToken, verifyPairToken, hashPin, newSalt, isValidPin,
+  pinIters, rowPinIters, DEFAULT_PIN_ITERS, MIN_PIN_LEN,
   newSessionToken, SESSION_PREFIX, nextRef, getSettings, settingOn, DEFAULT_SETTINGS,
 } from "../functions/api/_util.js";
 
@@ -143,16 +144,57 @@ await test("PIN hashing is deterministic per salt and differs across salts", asy
   const s1 = newSalt(), s2 = newSalt();
   assert.match(s1, /^[0-9a-f]{32}$/);
   assert.notEqual(s1, s2);
-  const a = await hashPin("1234", s1);
-  assert.equal(a, await hashPin("1234", s1), "same PIN and salt must hash the same");
-  assert.notEqual(a, await hashPin("1234", s2), "the same PIN under two salts must not collide");
-  assert.notEqual(a, await hashPin("1235", s1));
+  const a = await hashPin("123456", s1);
+  assert.equal(a, await hashPin("123456", s1), "same PIN and salt must hash the same");
+  assert.notEqual(a, await hashPin("123456", s2), "the same PIN under two salts must not collide");
+  assert.notEqual(a, await hashPin("123457", s1));
   assert.match(a, /^[0-9a-f]{64}$/);
 });
 
+await test("the work factor changes the hash, so it must be stored to verify", async () => {
+  const salt = newSalt();
+  const a = await hashPin("123456", salt, 5000);
+  const b = await hashPin("123456", salt, 6000);
+  assert.notEqual(a, b, "a different iteration count must give a different hash");
+  assert.equal(a, await hashPin("123456", salt, 5000));
+});
+
+await test("the work factor stays inside the free plan's CPU budget", () => {
+  // Workers Free allows 10 ms of CPU per request, shared with the database
+  // round trip and the JSON. Measured: ~3.9 ms at 25,000 iterations, ~6.6 ms at
+  // 50,000, ~19 ms at 150,000. Going over does not merely slow things down —
+  // the platform kills the request (error 1102) before our code can answer,
+  // and the app reports a server fault to a handler who can do nothing about
+  // it. Raise this only alongside the Workers Paid plan.
+  assert.ok(DEFAULT_PIN_ITERS <= 30000,
+    `DEFAULT_PIN_ITERS is ${DEFAULT_PIN_ITERS}; above ~30,000 the free plan kills the request`);
+  assert.ok(DEFAULT_PIN_ITERS >= 10000, "and below 10,000 the work factor stops being worth having");
+});
+
+await test("the work factor is settable per deployment, within sane bounds", () => {
+  assert.equal(pinIters({}), DEFAULT_PIN_ITERS);
+  assert.equal(pinIters({ PIN_ITERATIONS: "50000" }), 50000, "a paid deployment can raise it");
+  for (const bad of ["0", "999", "700000", "abc", "", "-5000", "25000.5"]) {
+    assert.equal(pinIters({ PIN_ITERATIONS: bad }), DEFAULT_PIN_ITERS, `accepted ${JSON.stringify(bad)}`);
+  }
+});
+
+await test("a row's own work factor wins, and pre-column rows fall back", () => {
+  assert.equal(rowPinIters({ pin_iters: 25000 }), 25000);
+  // Rows written before the column existed were hashed at 150,000; reading them
+  // as "the current default" would lock those accounts out permanently.
+  assert.equal(rowPinIters({}), 150000);
+  assert.equal(rowPinIters({ pin_iters: null }), 150000);
+  assert.equal(rowPinIters({ pin_iters: 0 }), 150000);
+  assert.equal(rowPinIters(null), 150000);
+});
+
 await test("PIN format is enforced at the boundary", () => {
-  for (const good of ["1234", "0000", "1234567890"]) assert.equal(isValidPin(good), true, `rejected ${good}`);
-  for (const bad of ["123", "12345678901", "12a4", "", " 1234", "1234 ", null, 1234, undefined]) {
+  assert.equal(MIN_PIN_LEN, 6, "six digits is the floor that makes an offline attack non-trivial");
+  for (const good of ["123456", "000000", "1234567890"]) assert.equal(isValidPin(good), true, `rejected ${good}`);
+  // Four digits is only ten thousand candidates — no work factor rescues that,
+  // so the length floor is the control that matters.
+  for (const bad of ["1234", "12345", "12345678901", "12a456", "", " 123456", "123456 ", null, 123456, undefined]) {
     assert.equal(isValidPin(bad), false, `accepted ${JSON.stringify(bad)}`);
   }
 });

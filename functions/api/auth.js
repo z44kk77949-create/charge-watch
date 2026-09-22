@@ -17,7 +17,8 @@
 import {
   db, noDb, json, all, first, run, now, uuid, clean, isSafeId,
   normCode, sha256hex, createSession, revokeToken, revokeAllForSubject, subjectByToken,
-  hashPin, newSalt, isValidPin, lockedFor, recordPinFailure, clearPinFailures,
+  hashPin, newSalt, isValidPin, pinIters, rowPinIters, MIN_PIN_LEN,
+  lockedFor, recordPinFailure, clearPinFailures,
   timingSafeEqual, audit,
 } from "./_util.js";
 
@@ -109,7 +110,9 @@ async function staffSignIn(env, b, device) {
   const mins = lockedFor(staff);
   if (mins) return json({ ok: false, error: `Too many wrong PINs. Try again in ${mins} minute${mins === 1 ? "" : "s"}.` }, 429);
 
-  const got = await hashPin(pin, staff.pin_salt);
+  // Hash with the work factor THIS row was written with, not the current
+  // default — otherwise raising the default would lock everyone out.
+  const got = await hashPin(pin, staff.pin_salt, rowPinIters(staff));
   if (!timingSafeEqual(got, staff.pin_hash)) {
     const locked = await recordPinFailure(env, staff);
     if (locked) return json({ ok: false, error: `Too many wrong PINs. Try again in ${locked} minutes.` }, 429);
@@ -135,12 +138,12 @@ async function bootstrap(env, b, device) {
   }
   const name = clean(b.name, 60), username = clean(b.username, 40).toLowerCase();
   if (!name || !/^[a-z0-9_.-]{3,40}$/.test(username)) return json({ ok: false, error: "Enter a name and a username (letters, numbers, dot, dash or underscore)." }, 400);
-  if (!isValidPin(b.pin)) return json({ ok: false, error: "Choose a PIN of 4 to 10 digits." }, 400);
+  if (!isValidPin(b.pin)) return json({ ok: false, error: `Choose a PIN of ${MIN_PIN_LEN} to 10 digits.` }, 400);
 
-  const salt = newSalt(), id = uuid();
+  const salt = newSalt(), id = uuid(), iters = pinIters(env);
   const res = await run(env,
-    "insert into staff (id, name, username, pin_hash, pin_salt, pin_set_at, role, active, created_at) values (?,?,?,?,?,?,?,1,?)",
-    [id, name, username, await hashPin(b.pin, salt), salt, now(), "owner", now()]);
+    "insert into staff (id, name, username, pin_hash, pin_salt, pin_iters, pin_set_at, role, active, created_at) values (?,?,?,?,?,?,?,?,1,?)",
+    [id, name, username, await hashPin(b.pin, salt, iters), salt, iters, now(), "owner", now()]);
   if (!res.ok) return json({ ok: false, error: "Couldn’t create the account — the username may be taken." }, 500);
 
   await audit(env, { actorType: "staff", actorId: id, actorName: name, action: "bootstrap", detail: "Owner account created" });

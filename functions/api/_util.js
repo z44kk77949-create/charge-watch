@@ -223,21 +223,63 @@ export async function tentScope(env, staff) {
 // working sign-in; `recordPinFailure` adds lockout so the PIN can't be guessed
 // online either.
 // ---------------------------------------------------------------------------
-const PIN_ITERS = 150000;
+// The work factor has to fit inside the platform's CPU budget, which on the
+// Workers FREE plan is 10 ms per request — and that budget is shared with the
+// database round trip and the JSON. Measured on comparable hardware:
+//
+//     5,000 iterations   1.0 ms
+//    10,000 iterations   1.8 ms
+//    25,000 iterations   3.9 ms
+//    50,000 iterations   6.6 ms
+//   150,000 iterations  19.3 ms   ← over budget; the request is killed with
+//                                   Cloudflare error 1102 and never reaches
+//                                   our code to report anything
+//
+// 25,000 leaves room for the rest of the request. Raising it is safe only on
+// the Workers Paid plan, so it is settable per deployment via PIN_ITERATIONS
+// and, crucially, STORED PER ROW — a later increase then applies to new and
+// reset PINs without invalidating the ones already set.
+//
+// Be clear about what the work factor does and doesn't buy: against an offline
+// attack on a stolen database, a short numeric PIN is weak at ANY iteration
+// count (a 6-digit PIN is a million candidates, which a GPU chews through).
+// What actually protects a PIN here is the length floor below plus the lockout
+// in `recordPinFailure` — the work factor just raises the cost of the offline
+// case from trivial to inconvenient.
+export const DEFAULT_PIN_ITERS = 25000;
 
-export async function hashPin(pin, saltHex) {
+// Rows written before iterations were stored used this value.
+const LEGACY_PIN_ITERS = 150000;
+
+export function pinIters(env) {
+  const n = Number(env && env.PIN_ITERATIONS);
+  return Number.isInteger(n) && n >= 1000 && n <= 600000 ? n : DEFAULT_PIN_ITERS;
+}
+
+export async function hashPin(pin, saltHex, iterations = DEFAULT_PIN_ITERS) {
   const salt = Uint8Array.from(saltHex.match(/.{2}/g).map(h => parseInt(h, 16)));
   const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(String(pin)), "PBKDF2", false, ["deriveBits"]);
-  const bits = await crypto.subtle.deriveBits({ name: "PBKDF2", hash: "SHA-256", salt, iterations: PIN_ITERS }, key, 256);
+  const bits = await crypto.subtle.deriveBits({ name: "PBKDF2", hash: "SHA-256", salt, iterations }, key, 256);
   return [...new Uint8Array(bits)].map(b => b.toString(16).padStart(2, "0")).join("");
+}
+
+// Verify against whatever work factor that row was written with, so changing
+// the default never locks anybody out.
+export function rowPinIters(staff) {
+  const n = Number(staff && staff.pin_iters);
+  return Number.isInteger(n) && n > 0 ? n : LEGACY_PIN_ITERS;
 }
 
 export function newSalt() {
   return [...crypto.getRandomValues(new Uint8Array(16))].map(b => b.toString(16).padStart(2, "0")).join("");
 }
 
+// Six digits minimum, not four. This is the change that actually matters for a
+// numeric secret: four digits is ten thousand candidates, which no work factor
+// can protect, while six is a hundred times harder for no extra typing.
+export const MIN_PIN_LEN = 6;
 export function isValidPin(pin) {
-  return typeof pin === "string" && /^[0-9]{4,10}$/.test(pin);
+  return typeof pin === "string" && new RegExp(`^[0-9]{${MIN_PIN_LEN},10}$`).test(pin);
 }
 
 export const MAX_PIN_FAILS = 5;

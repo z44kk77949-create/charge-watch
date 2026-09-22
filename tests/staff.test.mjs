@@ -33,7 +33,7 @@ const call = (env, body) => staffPost({ env, request: postRequest(body) }).then(
 // --- No escalation -----------------------------------------------------------
 await test("an admin cannot create an owner", async () => {
   const env = stubEnv(rules({ me: ADMIN }));
-  const r = await call(env, { code: TOKEN, action: "create", name: "Mallory", username: "mallory", pin: "1234", role: "owner" });
+  const r = await call(env, { code: TOKEN, action: "create", name: "Mallory", username: "mallory", pin: "123456", role: "owner" });
   assert.equal(r.status, 403);
   assert.match(r.error, /only an owner/i);
   assert.equal(env.__db.writeMatching(/insert into staff/), undefined);
@@ -41,9 +41,9 @@ await test("an admin cannot create an owner", async () => {
 
 await test("an owner can create an owner", async () => {
   const env = stubEnv(rules({ me: OWNER }));
-  const r = await call(env, { code: TOKEN, action: "create", name: "Robin", username: "robin", pin: "1234", role: "owner" });
+  const r = await call(env, { code: TOKEN, action: "create", name: "Robin", username: "robin", pin: "123456", role: "owner" });
   assert.equal(r.ok, true);
-  assert.equal(env.__db.writeMatching(/insert into staff/).params[6], "owner");
+  assert.equal(env.__db.writeMatching(/insert into staff/).params[7], "owner", "the role column shifted when pin_iters was added");
 });
 
 await test("an admin cannot promote anyone to owner", async () => {
@@ -56,7 +56,7 @@ await test("an admin cannot promote anyone to owner", async () => {
 await test("an admin cannot edit an owner's account at all", async () => {
   // Without this, "no escalation" is one unguarded field away from being moot.
   const env = stubEnv(rules({ me: ADMIN, target: OWNER }));
-  for (const body of [{ action: "update", name: "Not Scott" }, { action: "set_pin", pin: "9999" }, { action: "unlock" }]) {
+  for (const body of [{ action: "update", name: "Not Scott" }, { action: "set_pin", pin: "999999" }, { action: "unlock" }]) {
     const r = await call(env, { code: TOKEN, id: OWNER.id, ...body });
     assert.equal(r.status, 403, `${body.action} on an owner should be refused`);
   }
@@ -65,7 +65,7 @@ await test("an admin cannot edit an owner's account at all", async () => {
 
 await test("a handler cannot reach this endpoint at all", async () => {
   const env = stubEnv(rules({ me: HANDLER }));
-  assert.equal((await call(env, { code: TOKEN, action: "create", name: "X", username: "xx", pin: "1234" })).status, 403);
+  assert.equal((await call(env, { code: TOKEN, action: "create", name: "X", username: "xx", pin: "123456" })).status, 403);
   assert.equal((await staffGet({ env, request: getRequest("code=" + TOKEN) })).status, 403);
 });
 
@@ -100,18 +100,19 @@ await test("creating an account stores a hash, never the PIN", async () => {
   assert.ok(!w.params.includes("482913"), "the PIN must never be written");
   assert.match(String(w.params[3]), /^[0-9a-f]{64}$/, "a PBKDF2 hash should be stored");
   assert.match(String(w.params[4]), /^[0-9a-f]{32}$/, "with its own salt");
+  assert.ok(Number.isInteger(w.params[5]) && w.params[5] > 0, "and the work factor it was made with");
 });
 
 await test("a handler must be given a tent", async () => {
   const env = stubEnv(rules({ me: ADMIN }));
-  const r = await call(env, { code: TOKEN, action: "create", name: "Sam", username: "sam3", pin: "1234", role: "handler", tent_id: "" });
+  const r = await call(env, { code: TOKEN, action: "create", name: "Sam", username: "sam3", pin: "123456", role: "handler", tent_id: "" });
   assert.equal(r.status, 400);
   assert.match(r.error, /needs a tent/i);
 });
 
 await test("a duplicate username is refused with a useful message", async () => {
   const env = stubEnv(rules({ me: ADMIN, usernameTaken: true }));
-  const r = await call(env, { code: TOKEN, action: "create", name: "Sam", username: "sam", pin: "1234", role: "handler", tent_id: "tent-1" });
+  const r = await call(env, { code: TOKEN, action: "create", name: "Sam", username: "sam", pin: "123456", role: "handler", tent_id: "tent-1" });
   assert.equal(r.status, 409);
   assert.match(r.error, /taken/i);
 });
@@ -119,9 +120,10 @@ await test("a duplicate username is refused with a useful message", async () => 
 await test("usernames and PINs are validated", async () => {
   const env = stubEnv(rules({ me: ADMIN }));
   const bad = [
-    { username: "ab", pin: "1234" }, { username: "has space", pin: "1234" },
+    { username: "ab", pin: "123456" }, { username: "has space", pin: "123456" },
     { username: "sam9", pin: "12" }, { username: "sam9", pin: "letters" },
-    { username: "sam9", pin: "1234", name: "" },
+    { username: "sam9", pin: "1234" },   // four digits is no longer enough
+    { username: "sam9", pin: "123456", name: "" },
   ];
   for (const b of bad) {
     const r = await call(env, { code: TOKEN, action: "create", name: "Sam", tent_id: "tent-1", role: "handler", ...b });
@@ -133,7 +135,7 @@ await test("resetting a PIN signs that person out everywhere", async () => {
   // A forgotten PIN and a lost phone look identical from here, so the safe
   // reading is the second one.
   const env = stubEnv(rules({ me: ADMIN, target: HANDLER }));
-  const r = await call(env, { code: TOKEN, action: "set_pin", id: HANDLER.id, pin: "5566" });
+  const r = await call(env, { code: TOKEN, action: "set_pin", id: HANDLER.id, pin: "556677" });
   assert.equal(r.ok, true);
   assert.ok(env.__db.writeMatching(/update staff set pin_hash/), "the new hash is stored");
   assert.ok(env.__db.writeMatching(/update sessions set revoked_at/), "their sessions must be revoked");

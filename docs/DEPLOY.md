@@ -82,6 +82,24 @@ it). Anything not set simply leaves that feature dormant.
 | `VAPID_PUBLIC_KEY` | For web push | See below. |
 | `VAPID_PRIVATE_KEY` | For web push | See below. |
 | `VAPID_SUBJECT` | For web push | `mailto:` address push services can contact. |
+| `PIN_ITERATIONS` | Only on Workers Paid | PBKDF2 work factor for staff PINs. Leave unset on the **free plan** — the default 25,000 is chosen to fit its 10 ms CPU budget. See below. |
+
+### The free plan's CPU budget
+
+Workers Free allows **10 ms of CPU per request**, and PIN hashing is the only
+thing in this app that comes near it. Measured: 25,000 PBKDF2 iterations is
+about 4 ms; 150,000 is about 19 ms, which the platform *kills* (Cloudflare
+error 1102) before the function can answer — and a killed function returns an
+HTML error page, not JSON, so the app can only report a fault at our end.
+
+So the default is 25,000. On the **Workers Paid** plan the CPU limit is 30
+seconds and you can safely set `PIN_ITERATIONS` to 150000 or higher. The work
+factor is recorded against each row, so raising it applies to new and reset
+PINs and locks nobody out.
+
+Staff PINs are **6 to 10 digits**. The length floor matters more than the work
+factor: four digits is ten thousand candidates, which no iteration count can
+protect if the database ever leaks.
 
 **Environment variables only reach the running app on a fresh deployment.**
 After saving one, trigger a new deploy (push a commit, or use *Retry deployment*

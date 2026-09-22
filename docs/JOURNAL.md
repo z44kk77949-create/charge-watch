@@ -19,18 +19,18 @@ Done: repo created and pushed; Pages project `charge-watch` connected to `main`
 `ADMIN_INIT_KEY` and `PAIR_SECRET` set in the dashboard; migrations 001 and 002
 already applied to the database.
 
+`/api/health` confirmed green on 22 Sep: database bound and reachable,
+`pair_signing` true, Telegram and push not configured (as intended).
+
 **Next, in order:**
 
-1. **Confirm `/api/health`** reports `database.bound`, `database.reachable` and
-   `pair_signing` all true. That is the whole configuration, checked in one
-   request, and it never reveals a value.
-2. **Create the owner account** at `/admin/` using the setup key. The form
-   closes permanently once one staff row exists.
-3. **Set up a tent and one handler** (Admin → Tents, Admin → Staff).
-4. **Walk one charger end to end on real phones**: take it in at `/tent/`, scan
+1. **Create the owner account** at `/admin/` using the setup key, with a
+   **6-digit** PIN. The form closes permanently once one staff row exists.
+2. **Set up a tent and one handler** (Admin → Tents, Admin → Staff).
+3. **Walk one charger end to end on real phones**: take it in at `/tent/`, scan
    the slip with a phone camera, mark it ready, collect it with the code in the
    app. A desk cannot find what that will find.
-5. **Rotate `ADMIN_INIT_KEY`** once the owner account exists — it was generated
+4. **Rotate `ADMIN_INIT_KEY`** once the owner account exists — it was generated
    in a chat session, and after setup it is only needed for the one-time
    Telegram webhook registration.
 
@@ -111,3 +111,47 @@ no dependencies.
   `migration-001` and `migration-002` applied.
 
 Not deployed. See "Where we stopped".
+
+### 2026-09-22 — deployed, and the first real bug
+
+Live on Cloudflare Pages. Repo created, pushed, project connected, D1 bound as
+`DB`, `ADMIN_INIT_KEY` and `PAIR_SECRET` set in the dashboard. `/api/health`
+came back fully green.
+
+Then the owner-setup form failed with "Network error — check your connection",
+and it was neither the network nor the connection.
+
+**Root cause: the Workers FREE plan allows 10 ms of CPU per request, and PBKDF2
+at 150,000 iterations costs ~19 ms.** Every PIN operation was being killed by
+the platform (Cloudflare error 1102) before it could answer. `/api/health`
+worked throughout because it barely uses any CPU, which is what made the
+failure look like a routing or connectivity problem rather than a resource one.
+
+Three fixes, and a class swept rather than a patch:
+
+- **The work factor now fits the budget.** 25,000 iterations (~4 ms measured),
+  overridable per deployment with `PIN_ITERATIONS` for anyone on Workers Paid,
+  and **recorded against each row** (`pin_iters`, migration-003) so it can be
+  raised later without invalidating PINs already set. `tests/util.test.mjs`
+  guards the default against creeping back over the budget, with the
+  measurements in the comment so the next person doesn't have to re-derive
+  them.
+- **PINs are now 6 to 10 digits, not 4.** This is the change that actually
+  improves security. At four digits there are ten thousand candidates and no
+  work factor rescues that; six digits is a hundred times harder and costs a
+  handler nothing. The iteration count only ever raised the offline cost from
+  trivial to inconvenient — the real controls are the length floor and the
+  lockout.
+- **The error message was its own bug.** The frontend treated *any* non-JSON
+  response as a dropped connection, so a crashed or killed function told the
+  user to check their wifi. There is now one shared reader (`__readJson` in
+  `core.js`) that distinguishes a server fault from a network one and says
+  which, plus `postRaw` so all three sign-in screens report it identically
+  instead of each rolling their own `fetch`. A guard in
+  `tests/guards.test.mjs` bans a surface from calling `fetch("/api/...")`
+  directly again.
+
+Lesson worth keeping: **a serverless platform limit can look exactly like a
+network fault**, and the app's own error copy decides which one the operator
+goes hunting for. Getting that wrong cost a diagnostic round trip with the
+owner standing at the dashboard.

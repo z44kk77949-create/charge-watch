@@ -64,8 +64,10 @@ the bearer — stop; that is the bug this app exists to avoid.
 - **Collection codes** (the app) — never stored at all. Six digits derived by
   HMAC from the ticket id and a five-minute window, recomputed to verify. That
   is why the app can show a code it never received.
-- **Staff PINs** — PBKDF2-SHA256, 150k iterations, per-person salt, with
-  lockout after five wrong tries.
+- **Staff PINs** — 6 to 10 digits, PBKDF2-SHA256 with a per-person salt, the
+  work factor stored per row (25,000 by default; see the CPU-budget rule
+  below), and lockout after five wrong tries. The length floor and the lockout
+  are the real controls — a short numeric PIN is weak at any work factor.
 
 ### 4. Server-side authorisation, every time
 
@@ -142,5 +144,15 @@ a genuine 401 clears the token.
   a silently dropped insert is how a charger goes missing.
 - **Collection is not a status change.** The board cannot set `collected`;
   that path exists only in `/api/collect`, behind the proof check.
+- **Respect the platform's CPU budget — 10 ms per request on Workers Free.**
+  PBKDF2 at 150,000 iterations (~19 ms) was killed by the platform before it
+  could answer, and the app reported it as a network error, which sent a real
+  handler looking at their own wifi. The work factor now defaults to 25,000
+  (~4 ms) and is stored per row so it can be raised on a paid plan without
+  locking anyone out. Anything else expensive you add — a hash, a big parse, a
+  loop over every ticket — has to fit in the same budget.
+- **A non-JSON response is a SERVER fault, not a network one.** `api`/`post`/
+  `postRaw` tag it `__servererr` and say so. Never widen "network error" to
+  cover a crash; the person reading it can't fix their connection.
 - **Time is stored as ISO-8601 UTC strings**, written by the application. Never
   use SQLite's localtime-sensitive helpers.

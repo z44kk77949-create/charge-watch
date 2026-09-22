@@ -12,7 +12,8 @@
 
 import {
   db, noDb, json, all, first, run, now, uuid, clean, isSafeId,
-  requireStaff, hashPin, newSalt, isValidPin, revokeAllForSubject, audit,
+  requireStaff, hashPin, newSalt, isValidPin, pinIters, MIN_PIN_LEN,
+  revokeAllForSubject, audit,
 } from "./_util.js";
 
 const ROLES = ["handler", "admin", "owner"];
@@ -50,7 +51,7 @@ export async function onRequestPost(ctx) {
     const name = clean(b.name, 60);
     const username = clean(b.username, 40).toLowerCase();
     if (!name || !/^[a-z0-9_.-]{3,40}$/.test(username)) return json({ ok: false, error: "Enter a name and a username (letters, numbers, dot, dash or underscore)." }, 400);
-    if (!isValidPin(b.pin)) return json({ ok: false, error: "Set a PIN of 4 to 10 digits." }, 400);
+    if (!isValidPin(b.pin)) return json({ ok: false, error: `Set a PIN of ${MIN_PIN_LEN} to 10 digits.` }, 400);
 
     const role = ROLES.includes(b.role) ? b.role : "handler";
     if (role === "owner" && me.role !== "owner") return json({ ok: false, error: "Only an owner can create another owner." }, 403);
@@ -62,10 +63,10 @@ export async function onRequestPost(ctx) {
     const clash = await first(env, "select id from staff where lower(username) = ?", [username]);
     if (clash) return json({ ok: false, error: `Username "${username}" is taken.` }, 409);
 
-    const id = uuid(), salt = newSalt();
+    const id = uuid(), salt = newSalt(), iters = pinIters(env);
     const res = await run(env,
-      "insert into staff (id, name, username, pin_hash, pin_salt, pin_set_at, role, tent_id, active, created_at) values (?,?,?,?,?,?,?,?,1,?)",
-      [id, name, username, await hashPin(b.pin, salt), salt, now(), role, tentId, now()]);
+      "insert into staff (id, name, username, pin_hash, pin_salt, pin_iters, pin_set_at, role, tent_id, active, created_at) values (?,?,?,?,?,?,?,?,?,1,?)",
+      [id, name, username, await hashPin(b.pin, salt, iters), salt, iters, now(), role, tentId, now()]);
     if (!res.ok) return json({ ok: false, error: "Couldn't create that account — try again." }, 500);
     await audit(env, { actorType: "staff", actorId: me.id, actorName: me.name, action: "staff", detail: `Created ${role} account "${username}" for ${name}` });
     return json({ ok: true, id });
@@ -120,10 +121,10 @@ export async function onRequestPost(ctx) {
   }
 
   if (b.action === "set_pin") {
-    if (!isValidPin(b.pin)) return json({ ok: false, error: "A PIN is 4 to 10 digits." }, 400);
-    const salt = newSalt();
-    const res = await run(env, "update staff set pin_hash = ?, pin_salt = ?, pin_set_at = ?, fail_count = 0, locked_until = null where id = ?",
-      [await hashPin(b.pin, salt), salt, now(), target.id]);
+    if (!isValidPin(b.pin)) return json({ ok: false, error: `A PIN is ${MIN_PIN_LEN} to 10 digits.` }, 400);
+    const salt = newSalt(), iters = pinIters(env);
+    const res = await run(env, "update staff set pin_hash = ?, pin_salt = ?, pin_iters = ?, pin_set_at = ?, fail_count = 0, locked_until = null where id = ?",
+      [await hashPin(b.pin, salt, iters), salt, iters, now(), target.id]);
     if (!res.ok) return json({ ok: false, error: "Couldn't set that PIN — try again." }, 500);
     // A new PIN means the old one is gone; anything signed in with it goes too,
     // which is the whole point when a phone has been lost.

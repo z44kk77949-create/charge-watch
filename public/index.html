@@ -163,10 +163,7 @@ async function submitCode() {
 }
 
 async function redeem(claimCode, fromLink) {
-  const r = await fetch("/api/auth", {
-    method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ action: "claim", claim_code: claimCode, code: code() || undefined }),
-  }).then(x => x.json()).catch(() => ({ ok: false, error: "Network error — check your connection." }));
+  const r = await postRaw("/api/auth", { action: "claim", claim_code: claimCode, code: code() || undefined });
 
   if (!r.ok) {
     // A bad code from a scanned link has no form behind it yet, so paint the
